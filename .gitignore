@@ -9,3 +9,7 @@ __pycache__/
 # device backups / local scratch
 *.epe
 *.local.json
+
+# claude: keep shared settings.json, drop personal + ephemeral agent worktrees
+.claude/settings.local.json
+.claude/worktrees/

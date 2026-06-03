@@ -20,6 +20,7 @@
   button.go { background:#2b6a44; border-color:#3c8a5b; color:#eafff0; }
   .dot { width:10px; height:10px; border-radius:50%; background:#5b3a3a; display:inline-block; }
   .dot.on { background:#4caf6a; box-shadow:0 0 8px #4caf6a; }
+  .dot.beat { background:#e85d7a; box-shadow:0 0 12px #e85d7a; }
   .k { color:#7d8794; }
   label.sld { display:flex; align-items:center; gap:8px; margin:4px 0; }
   label.sld span:first-child { width:90px; color:#7d8794; }
@@ -51,6 +52,7 @@
   <div class="row">
     <button id="audio" class="go">Start audio</button>
     <span class="dot" id="adot"></span><span class="k" id="astat">no source</span>
+    <span class="dot" id="bdot"></span><span class="k">beat</span>
   </div>
 
   <div id="sliders"></div>
@@ -65,20 +67,53 @@
   </div>
 
   <div class="note">
-    1. Load <code>patterns/reactive.js</code> on the Pixelblaze and make it the active pattern.<br>
+    1. Load <code>patterns/reactive.js</code> (scalar bands) or <code>patterns/spectrum.js</code>
+    (the N-band array) on the Pixelblaze and make it the active pattern. For
+    <code>spectrum.js</code>, its on-device array length must equal <b>bands</b> below.<br>
     2. Enter its IP, hit <b>Connect</b>. 3. Hit <b>Start audio</b> and pick a <b>tab/screen with "Share audio" checked</b>
-    (Chrome). Play music there. The strip reacts to <code>bass</code>/<code>mid</code>/<code>treble</code>/<code>level</code>.<br>
+    (Chrome). Play music there. The strip reacts to <code>bass</code>/<code>mid</code>/<code>treble</code>/<code>level</code>
+    plus the <code>bands</code> spectrum array.<br>
     Serve over <b>http</b> (not https) so <code>ws://</code> isn't blocked: <code>python3 -m http.server</code>.
   </div>
 </div>
 
 <script type="module">
-const P = { gain: 1.8, smooth: 0.7, rateHz: 40 };
+const P = { gain: 1.8, smooth: 0.7, rateHz: 40, nbands: 16, beatSens: 2.0 };
 
 const $ = id => document.getElementById(id);
 let ws = null, audioCtx = null, analyser = null, freq = null;
 let bands = { bass:0, mid:0, treble:0, level:0 };
-let lastSend = 0;
+let spectrum = [];          // N log-spaced 0..1 bands, recomputed each frame
+let lastSend = 0, lastT = 0;
+
+// ── beat detection (bass-flux over a rolling window) ───────────────────────
+// Keep ~1 s of recent bass energy; a frame whose bass jumps past
+// mean + beatSens·stddev (and clears a refractory gap) is a beat. `beatPulse`
+// snaps to 1 on a hit and decays, and is streamed as the `beat` var.
+const HIST = 43;            // ~1 s at 40 Hz
+let bassHist = [];
+let beatPulse = 0, lastBeat = 0;
+function detectBeat(now) {
+  const x = bands.bass;
+  let mean = 0; for (const v of bassHist) mean += v; mean /= (bassHist.length || 1);
+  let varc = 0; for (const v of bassHist) varc += (v - mean) * (v - mean); varc /= (bassHist.length || 1);
+  const std = Math.sqrt(varc);
+  if (bassHist.length >= HIST && x > 0.1 && x > mean + P.beatSens * std && now - lastBeat > 250) {
+    beatPulse = 1; lastBeat = now;
+    $('bdot').classList.add('beat');
+    setTimeout(() => $('bdot').classList.remove('beat'), 90);
+  }
+  bassHist.push(x); if (bassHist.length > HIST) bassHist.shift();
+}
+
+// log-spaced edges across 20 Hz..16 kHz → N bands. Rebuilt when N changes.
+let bandEdges = [];
+function rebuildBandEdges() {
+  const n = P.nbands, lo = 20, hi = 16000;
+  bandEdges = [];
+  for (let i = 0; i <= n; i++) bandEdges.push(lo * Math.pow(hi / lo, i / n));
+}
+rebuildBandEdges();
 
 // ── WebSocket to the Pixelblaze (ws://ip:81) ───────────────────────────────
 function connect() {
@@ -99,6 +134,8 @@ function sendVars() {
     mid:    round(bands.mid),
     treble: round(bands.treble),
     level:  round(bands.level),
+    bands:  spectrum.map(round),     // N log-spaced bands, 20 Hz..16 kHz
+    beat:   round(beatPulse),        // 1 on a detected beat, decaying to 0
   }}));
 }
 const round = v => Math.round(v * 1000) / 1000;
@@ -147,6 +184,13 @@ function loop(t) {
     bands.mid    = bandEnergy(250, 2000);
     bands.treble = bandEnergy(2000, 8000);
     bands.level  = bandEnergy(20, 16000);
+    // N log-spaced spectrum bands, reusing bandEnergy() for each edge pair.
+    spectrum = [];
+    for (let i = 0; i < P.nbands; i++) spectrum.push(bandEnergy(bandEdges[i], bandEdges[i + 1]));
+    // beat detection + frame-rate-independent pulse decay (~120 ms).
+    const dt = lastT ? t - lastT : 16; lastT = t;
+    detectBeat(t);
+    beatPulse *= Math.exp(-dt / 120);
     draw();
     meters();
     if (t - lastSend >= 1000 / P.rateHz) { sendVars(); lastSend = t; }
@@ -180,6 +224,8 @@ const SLIDERS = [
   ['gain', 'gain', 0.5, 4, 0.1],
   ['smoothing', 'smooth', 0, 0.95, 0.05],
   ['send rate Hz', 'rateHz', 10, 60, 1],
+  ['bands', 'nbands', 8, 64, 1],
+  ['beat sens', 'beatSens', 1, 4, 0.1],
 ];
 const box = $('sliders');
 for (const [label, k, min, max, step] of SLIDERS) {
@@ -187,7 +233,10 @@ for (const [label, k, min, max, step] of SLIDERS) {
   const s1 = document.createElement('span'); s1.textContent = label;
   const inp = document.createElement('input'); inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step; inp.value = P[k];
   const s2 = document.createElement('span'); s2.textContent = P[k];
-  inp.oninput = () => { P[k] = parseFloat(inp.value); s2.textContent = P[k]; };
+  inp.oninput = () => {
+    P[k] = parseFloat(inp.value); s2.textContent = P[k];
+    if (k === 'nbands') rebuildBandEdges();   // changing N reshapes the array sent
+  };
   l.append(s1, inp, s2); box.appendChild(l);
 }
 
