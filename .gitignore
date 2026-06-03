@@ -1,0 +1,11 @@
+# os / editor
+.DS_Store
+*.swp
+
+# python (if a streamer variant is added later — use Apple python / a --symlinks venv)
+.venv/
+__pycache__/
+
+# device backups / local scratch
+*.epe
+*.local.json
