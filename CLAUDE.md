@@ -19,15 +19,22 @@ Independent project (not the Burning Man / grub-bike work, though it grew out of
   page blocks as mixed content.
 
 ## The contract (keep app and pattern in sync)
-The app streams four `0..1` floats ~40×/sec via `{"setVars": {...}}`; the pattern
+The app streams these values ~40×/sec via `{"setVars": {...}}`; the pattern
 `export`s them. Changing the set means editing **both** sides.
 
-| var | band |
+| var | band / kind |
 |-----|------|
 | `bass`   | 20–250 Hz |
 | `mid`    | 250 Hz–2 kHz |
 | `treble` | 2–8 kHz |
 | `level`  | 20 Hz–16 kHz |
+| `bands`  | array of N log-spaced bands, 20 Hz–16 kHz (N = app **bands** slider, default 16) |
+| `beat`   | 0..1 pulse, snaps to 1 on a detected bass onset and decays |
+
+The four scalars are the original contract; `bands` (array) and `beat` (pulse) are
+sent in the **same** `setVars` frame and are back-compatible — patterns that only
+read the scalars still work. For `bands`, the array length declared on the device
+(`spectrum.js` `NBANDS`) must equal the app's band count or only the overlap updates.
 
 `setVars` only reaches the **active** pattern, so the reactive pattern must be running.
 
