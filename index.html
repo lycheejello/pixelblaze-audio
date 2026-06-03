@@ -28,6 +28,9 @@
   label.sld span:last-child { width:42px; text-align:right; color:#8fd6a0; }
   canvas { display:block; width:100%; height:160px; background:#0e1217;
            border:1px solid #222b36; border-radius:8px; margin-top:14px; }
+  canvas#strip { height:34px; margin-top:10px; image-rendering:pixelated; }
+  select { font:inherit; background:#11151b; color:#cdd6e0; border:1px solid #2a313c;
+           border-radius:6px; padding:6px 9px; }
   .meters { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:12px; }
   .meter { background:#11151b; border:1px solid #1c2430; border-radius:8px; padding:8px 10px; }
   .meter .lbl { color:#7d8794; font-size:11px; }
@@ -66,6 +69,21 @@
     <div class="meter"><div class="lbl">level</div><div class="bar"><div class="fill" id="m-level" style="background:#cdd6e0"></div></div></div>
   </div>
 
+  <div class="row">
+    <span class="k">strip preview</span>
+    <select id="preview">
+      <option value="spectrum">spectrum.js</option>
+      <option value="reactive">reactive.js</option>
+      <option value="beat">beat.js</option>
+      <option value="beat-pump">beat-pump.js</option>
+      <option value="vu-bar">vu-bar.js</option>
+      <option value="plasma">plasma.js</option>
+      <option value="sparkle">sparkle.js</option>
+    </select>
+    <span class="k">— JS mirror of the device pattern (local preview only)</span>
+  </div>
+  <canvas id="strip"></canvas>
+
   <div class="note">
     1. Load <code>patterns/reactive.js</code> (scalar bands) or <code>patterns/spectrum.js</code>
     (the N-band array) on the Pixelblaze and make it the active pattern. For
@@ -78,7 +96,7 @@
 </div>
 
 <script type="module">
-const P = { gain: 1.8, smooth: 0.7, rateHz: 40, nbands: 16, beatSens: 2.0 };
+const P = { gain: 1.8, smooth: 0.7, rateHz: 40, nbands: 16, beatSens: 2.0, pixels: 60 };
 
 const $ = id => document.getElementById(id);
 let ws = null, audioCtx = null, analyser = null, freq = null;
@@ -193,6 +211,7 @@ function loop(t) {
     beatPulse *= Math.exp(-dt / 120);
     draw();
     meters();
+    drawStrip(dt);
     if (t - lastSend >= 1000 / P.rateHz) { sendVars(); lastSend = t; }
   }
 }
@@ -219,6 +238,84 @@ function meters() {
   $('m-level').style.width  = (bands.level  * 100) + '%';
 }
 
+// ── strip preview: JS mirrors of the device patterns (local preview only) ───
+// Faithful-ish ports of patterns/*.js, driven by the same live bands/beat
+// values, so you can preview the strip without hardware. If you edit a PBscript
+// pattern, update its mirror here too (and vice versa) to keep them honest.
+const strip = $('strip'), sctx = strip.getContext('2d');
+const envF = (target, cur, dt, fall) => target > cur ? target : cur + (target - cur) * Math.min(1, dt / fall);
+const wave = u => (Math.sin(u * 2 * Math.PI) + 1) / 2;             // matches PB wave()
+const clampv = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+
+const PREVIEW = {
+  reactive: (() => { let eB = 0, eM = 0, eT = 0; return {
+    before(dt) { eB = envF(bands.bass, eB, dt, 150); eM = envF(bands.mid, eM, dt, 150); eT = envF(bands.treble, eT, dt, 150); },
+    pixel(f) { const amp = f < 1/3 ? eB : (f < 2/3 ? eM : eT); return [0.66 - f * 0.66, 1, clampv(amp * amp)]; },
+  }; })(),
+  spectrum: (() => { let env = []; return {
+    before(dt) { const n = spectrum.length; if (env.length !== n) env = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150); },
+    pixel(f) { const n = env.length || 1; let b = Math.floor(f * n); if (b >= n) b = n - 1;
+      const amp = env[b] || 0; return [0.66 - (b / Math.max(1, n - 1)) * 0.66, 1, clampv(amp * amp)]; },
+  }; })(),
+  beat: (() => { let eBeat = 0, eT = 0; return {
+    before(dt) { eBeat = envF(beatPulse, eBeat, dt, 140); eT = envF(bands.treble, eT, dt, 300); },
+    pixel() { return [0.55 - eT * 0.55, 1, clampv(eBeat * eBeat, 0.02, 1)]; },
+  }; })(),
+  'beat-pump': (() => { let eB = 0, eT = 0; return {
+    before(dt) { eB = envF(bands.bass, eB, dt, 180); eT = envF(bands.treble, eT, dt, 300); },
+    pixel() { return [0.6 - eT * 0.6, 1, clampv(eB * eB, 0.02, 1)]; },
+  }; })(),
+  'vu-bar': (() => { let eL = 0, peak = 0; return {
+    before(dt) { eL = envF(bands.level, eL, dt, 120); peak = eL > peak ? eL : Math.max(eL, peak - dt / 1200); },
+    pixel(f, i, n) { const peakLo = peak - 1 / Math.max(1, n);
+      if (f <= peak && f > peakLo) return [0.33 * (1 - peak), 0.4, 1];
+      if (f < eL) return [0.33 * (1 - f), 1, 1];
+      return [0, 0, 0]; },
+  }; })(),
+  plasma: (() => { let eL = 0, eM = 0, eT = 0, phase = 0; return {
+    before(dt) { eL = envF(bands.level, eL, dt, 200); eM = envF(bands.mid, eM, dt, 250); eT = envF(bands.treble, eT, dt, 250);
+      phase += dt / 1000 * (0.15 + eL * 0.9); },
+    pixel(f) { const w1 = wave(f * 2 + phase), w2 = wave(f * 3.7 - phase * 0.6 + wave(phase * 0.3));
+      const field = (w1 + w2) / 2; return [eM * 0.5 + field * (0.15 + eT * 0.85), 1, clampv(field * field * (0.3 + eL * 0.7))]; },
+  }; })(),
+  sparkle: (() => { let eB = 0, eT = 0, eL = 0, spark = []; return {
+    before(dt) { eB = envF(bands.bass, eB, dt, 150); eT = envF(bands.treble, eT, dt, 80); eL = envF(bands.level, eL, dt, 200);
+      const n = P.pixels; if (spark.length !== n) spark = new Array(n).fill(0);
+      const decay = 1 - Math.min(1, dt / 150), ignite = eT > 0.08 ? eT * eT * 0.6 : 0;
+      for (let i = 0; i < n; i++) { spark[i] *= decay; if (Math.random() < ignite) spark[i] = 1; } },
+    pixel(f, i) { const baseV = clampv(eB * eB * 0.5 + eL * 0.08, 0, 0.6), baseH = 0.95 - eB * 0.12, s = spark[i] || 0;
+      return s > 0.01 ? [0.6, 1 - s, Math.max(baseV, s)] : [baseH, 1, baseV]; },
+  }; })(),
+};
+
+// HSV (0..1) → css rgb, hue wraps — mirrors the device's hsv().
+function hsv2rgb(h, s, v) {
+  h = (h % 1 + 1) % 1; const i = Math.floor(h * 6), f = h * 6 - i;
+  const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+  let r, g, b;
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break;  case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t; break;  case 3: r = p; g = q; b = v; break;
+    case 4: r = t; g = p; b = v; break;  default: r = v; g = p; b = q;
+  }
+  return `rgb(${r * 255 | 0},${g * 255 | 0},${b * 255 | 0})`;
+}
+
+function drawStrip(dt) {
+  const w = strip.width = strip.clientWidth * devicePixelRatio;
+  const h = strip.height = strip.clientHeight * devicePixelRatio;
+  const pat = PREVIEW[$('preview').value]; if (!pat) return;
+  pat.before(dt);
+  const n = P.pixels, pw = w / n;
+  for (let i = 0; i < n; i++) {
+    const f = n > 1 ? i / (n - 1) : 0;
+    const [hh, ss, vv] = pat.pixel(f, i, n);
+    sctx.fillStyle = hsv2rgb(hh, ss, vv);
+    sctx.fillRect(i * pw, 0, pw + 1, h);
+  }
+}
+
 // ── sliders ────────────────────────────────────────────────────────────────
 const SLIDERS = [
   ['gain', 'gain', 0.5, 4, 0.1],
@@ -226,6 +323,7 @@ const SLIDERS = [
   ['send rate Hz', 'rateHz', 10, 60, 1],
   ['bands', 'nbands', 8, 64, 1],
   ['beat sens', 'beatSens', 1, 4, 0.1],
+  ['preview px', 'pixels', 8, 300, 1],
 ];
 const box = $('sliders');
 for (const [label, k, min, max, step] of SLIDERS) {

@@ -30,7 +30,9 @@ pattern that reads those bands.
    **tab or screen with "Share audio" checked** (Chrome). Play music there.
 
 The strip now reacts — bass at one end, treble at the other. Tune **gain**,
-**smoothing**, **send rate**, and the spectrum **bands** count live.
+**smoothing**, **send rate**, and the spectrum **bands** count live. The app also
+shows a **strip preview** (a JS mirror of the selected pattern) so you can audition
+patterns locally without watching the hardware — pick one from the dropdown.
 
 ## The variable contract
 
@@ -65,6 +67,21 @@ rest stay 0. Keep the two in sync.
 
 Write your own patterns against any of these vars; the app doesn't care what they
 drive.
+
+## Patterns — what to play
+
+Each pattern leans on different bands, so some music suits it better. Use the app's
+**strip preview** dropdown to audition them against whatever's playing.
+
+| pattern | what it does | plays best with |
+|---------|--------------|-----------------|
+| `reactive.js`  | bass / mid / treble split into thirds of the strip | all-rounder — pop, rock, most electronic |
+| `spectrum.js`  | full N-band analyzer across the strip | detailed mixes — orchestral, jazz, IDM, complex electronic |
+| `beat.js`      | whole strip flashes on each detected beat | a steady, clear kick — house, techno, hip-hop, drum & bass |
+| `beat-pump.js` | whole strip pumps on bass, hue drifts with treble | bass-forward — dubstep, trap, drum & bass, hip-hop |
+| `vu-bar.js`    | loudness VU bar with a peak-hold marker | dynamic material — rock, live sets, big builds/drops, even speech |
+| `plasma.js`    | flowing ambient field, speed/brightness from loudness | beatless & smooth — ambient, downtempo, lo-fi, classical |
+| `sparkle.js`   | white twinkles on treble over a bass-tinted glow | bright highs — acoustic, jazz, glitch, hi-hat-heavy EDM, holiday |
 
 ## Notes / gotchas
 
