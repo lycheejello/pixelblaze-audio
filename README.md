@@ -77,6 +77,7 @@ Each pattern leans on different bands, so some music suits it better. Use the ap
 |---------|--------------|-----------------|
 | `reactive.js`  | bass / mid / treble split into thirds of the strip | all-rounder — pop, rock, most electronic |
 | `spectrum.js`  | full N-band analyzer across the strip | detailed mixes — orchestral, jazz, IDM, complex electronic |
+| `spectrum-mirror.js` | same analyzer folded around the center — bass blooms outward from the middle | symmetric installs, center-mounted strips, anything you want to "breathe" |
 | `beat.js`      | whole strip flashes on each detected beat | a steady, clear kick — house, techno, hip-hop, drum & bass |
 | `beat-pump.js` | whole strip pumps on bass, hue drifts with treble | bass-forward — dubstep, trap, drum & bass, hip-hop |
 | `vu-bar.js`    | loudness VU bar with a peak-hold marker | dynamic material — rock, live sets, big builds/drops, even speech |
@@ -104,6 +105,7 @@ index.html          # the streamer: audio capture + FFT + WebSocket + visualizer
 patterns/
   reactive.js       # spectrum pattern reading bass/mid/treble/level (+ alternates)
   spectrum.js       # N-band analyzer reading the bands[] array (N must match the app)
+  spectrum-mirror.js # spectrum.js folded around the center (bass-in-middle, radiates out)
   beat.js           # whole-strip flash synced to the `beat` pulse
   vu-bar.js         # loudness VU bar with peak-hold, driven by `level`
   beat-pump.js      # whole-strip pump on `bass`, hue drifts with `treble`

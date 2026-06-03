@@ -73,6 +73,7 @@
     <span class="k">strip preview</span>
     <select id="preview">
       <option value="spectrum">spectrum.js</option>
+      <option value="spectrum-mirror">spectrum-mirror.js</option>
       <option value="reactive">reactive.js</option>
       <option value="beat">beat.js</option>
       <option value="beat-pump">beat-pump.js</option>
@@ -257,6 +258,14 @@ const PREVIEW = {
       for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150); },
     pixel(f) { const n = env.length || 1; let b = Math.floor(f * n); if (b >= n) b = n - 1;
       const amp = env[b] || 0; return [0.66 - (b / Math.max(1, n - 1)) * 0.66, 1, clampv(amp * amp)]; },
+  }; })(),
+  'spectrum-mirror': (() => { let env = []; const warmCenter = true; return {
+    before(dt) { const n = spectrum.length; if (env.length !== n) env = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150); },
+    pixel(f) { const n = env.length || 1; const m = Math.abs(f - 0.5) * 2;
+      let b = Math.floor(m * n); if (b >= n) b = n - 1;
+      const amp = env[b] || 0, t = b / Math.max(1, n - 1);
+      return [warmCenter ? t * 0.66 : 0.66 - t * 0.66, 1, clampv(amp * amp)]; },
   }; })(),
   beat: (() => { let eBeat = 0, eT = 0; return {
     before(dt) { eBeat = envF(beatPulse, eBeat, dt, 140); eT = envF(bands.treble, eT, dt, 300); },
