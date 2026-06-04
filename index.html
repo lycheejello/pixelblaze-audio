@@ -303,17 +303,20 @@ const PREVIEW = {
 
   // Two-strip patterns: rows() returns [dense 300px, sparse 150px], drawn stacked
   // at their real counts so the density mismatch reads true (see drawStrip).
-  'depth-layers': (() => { let env = [], eB = 0, eT = 0, eL = 0, spark = new Array(300).fill(0); return {
+  'depth-layers': (() => { let env = [], eB = 0, eM = 0, eT = 0, eL = 0, tS = 0, phase = 0, spark = new Array(300).fill(0); return {
     before(dt) { const n = spectrum.length; if (env.length !== n) env = new Array(n).fill(0);
       for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150);
-      eB = envF(bands.bass, eB, dt, 150); eT = envF(bands.treble, eT, dt, 80); eL = envF(bands.level, eL, dt, 350);
-      const decay = 1 - Math.min(1, dt / 150), ignite = eT > 0.08 ? eT * eT * 0.5 : 0;
+      eB = envF(bands.bass, eB, dt, 150); eM = envF(bands.mid, eM, dt, 250); eT = envF(bands.treble, eT, dt, 80); eL = envF(bands.level, eL, dt, 350);
+      phase += dt / 1000 * (0.05 + eL * 0.4);
+      tS += (eT - tS) * Math.min(1, dt / 500);
+      const transient = Math.max(0, eT - tS), decay = 1 - Math.min(1, dt / 120), ignite = transient > 0.04 ? transient * 0.3 : 0;
       for (let i = 0; i < 300; i++) { spark[i] *= decay; if (Math.random() < ignite) spark[i] = 1; } },
     rows() { const n = env.length || 1; return [
       { n: 300, pixel: (f, i) => { let b = Math.floor(f * n); if (b >= n) b = n - 1;
-        const e = env[b] || 0, amp = clampv(e * e), h = 0.66 - (b / Math.max(1, n - 1)) * 0.66, s = spark[i] || 0;
-        return s > 0.01 ? [0.6, 1 - s, Math.max(amp, s)] : [h, 1, amp]; } },
-      { n: 150, pixel: (f) => [0.66 - eB * 0.18 + f * 0.06, 0.9, clampv(eL * 0.45 + eB * eB * 0.5)] },
+        const g = (env[b] || 0) * (1 + (b / Math.max(1, n - 1)) * 1.8), amp = clampv(g * g), h = 0.66 - (b / Math.max(1, n - 1)) * 0.66, s = spark[i] || 0;
+        return s > 0.01 ? [0.6, 1 - s * 0.75, Math.max(amp, s * 0.85)] : [h, 1, amp]; } },
+      { n: 150, pixel: (f) => { const w = wave(f * 1.5 - phase), v = clampv((eL * 0.4 + eM * 0.25 + eB * eB * 0.5) * (0.35 + 0.65 * w));
+        return [0.66 - eB * 0.18 + f * 0.06 + wave(phase * 0.3) * 0.08, 0.9, v]; } },
     ]; },
   }; })(),
   'crossed-spectrum': (() => { let env = []; return {
