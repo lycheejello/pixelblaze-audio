@@ -84,6 +84,22 @@ Each pattern leans on different bands, so some music suits it better. Use the ap
 | `plasma.js`    | flowing ambient field, speed/brightness from loudness | beatless & smooth — ambient, downtempo, lo-fi, classical |
 | `sparkle.js`   | white twinkles on treble over a bass-tinted glow | bright highs — acoustic, jazz, glitch, hi-hat-heavy EDM, holiday |
 
+### Two-strip patterns (Output Expander)
+
+For a setup with **two strips of the same physical length but different pixel
+density** wired to the expander (this install: out0 = 300 px dense, out1 = 150 px
+sparse → one continuous index space, `0..299` then `300..449`). Each treats the
+strips as physically-aligned layers and exploits the density mismatch. The split
+point is `var N0` at the top of each file — edit it for other counts. Audition
+them in the **strip preview** (they render as two stacked rows at the real counts).
+
+| pattern | what it does | plays best with |
+|---------|--------------|-----------------|
+| `depth-layers.js` | dense = crisp spectrum + treble sparkle; sparse = soft, blurry bass/level color wash behind | layered, atmospheric mixes — house, melodic techno, synthwave |
+| `crossed-spectrum.js` | dense = linear spectrum (bass→treble); sparse = mirrored (bass center) — a kick spreads across both | beat-forward music where you want the low end to "open out" |
+| `moire-ripple.js` | same outward ripple on both; differing pitch makes the wavefronts shimmer in/out of phase, hardest on drops | big builds & drops — dubstep, DnB, festival EDM |
+| `chunky-vu-spectrum.js` | dense = fine N-band spectrum; sparse = fat VU bar with peak-hold | dynamic material — rock, live sets, loud-quiet-loud |
+
 ## Notes / gotchas
 
 - **Chrome** is the reliable browser for `getDisplayMedia({audio:true})`. Tab audio
@@ -111,4 +127,9 @@ patterns/
   beat-pump.js      # whole-strip pump on `bass`, hue drifts with `treble`
   plasma.js         # flowing plasma field modulated by level/mid/treble
   sparkle.js        # treble twinkle over a bass-tinted base
+  # two-strip (Output Expander, out0=300px dense + out1=150px sparse):
+  depth-layers.js       # crisp spectrum/sparkle front + blurry bass wash behind
+  crossed-spectrum.js   # linear spectrum (dense) crossed with mirrored (sparse)
+  moire-ripple.js       # one ripple, two pitches → interference shimmer
+  chunky-vu-spectrum.js # fine spectrum (dense) + fat VU bar (sparse)
 ```

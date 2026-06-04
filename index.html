@@ -80,6 +80,10 @@
       <option value="vu-bar">vu-bar.js</option>
       <option value="plasma">plasma.js</option>
       <option value="sparkle">sparkle.js</option>
+      <option value="depth-layers">depth-layers.js (2-strip)</option>
+      <option value="crossed-spectrum">crossed-spectrum.js (2-strip)</option>
+      <option value="moire-ripple">moire-ripple.js (2-strip)</option>
+      <option value="chunky-vu-spectrum">chunky-vu-spectrum.js (2-strip)</option>
     </select>
     <span class="k">— JS mirror of the device pattern (local preview only)</span>
   </div>
@@ -296,6 +300,53 @@ const PREVIEW = {
     pixel(f, i) { const baseV = clampv(eB * eB * 0.5 + eL * 0.08, 0, 0.6), baseH = 0.95 - eB * 0.12, s = spark[i] || 0;
       return s > 0.01 ? [0.6, 1 - s, Math.max(baseV, s)] : [baseH, 1, baseV]; },
   }; })(),
+
+  // Two-strip patterns: rows() returns [dense 300px, sparse 150px], drawn stacked
+  // at their real counts so the density mismatch reads true (see drawStrip).
+  'depth-layers': (() => { let env = [], eB = 0, eT = 0, eL = 0, spark = new Array(300).fill(0); return {
+    before(dt) { const n = spectrum.length; if (env.length !== n) env = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150);
+      eB = envF(bands.bass, eB, dt, 150); eT = envF(bands.treble, eT, dt, 80); eL = envF(bands.level, eL, dt, 350);
+      const decay = 1 - Math.min(1, dt / 150), ignite = eT > 0.08 ? eT * eT * 0.5 : 0;
+      for (let i = 0; i < 300; i++) { spark[i] *= decay; if (Math.random() < ignite) spark[i] = 1; } },
+    rows() { const n = env.length || 1; return [
+      { n: 300, pixel: (f, i) => { let b = Math.floor(f * n); if (b >= n) b = n - 1;
+        const e = env[b] || 0, amp = clampv(e * e), h = 0.66 - (b / Math.max(1, n - 1)) * 0.66, s = spark[i] || 0;
+        return s > 0.01 ? [0.6, 1 - s, Math.max(amp, s)] : [h, 1, amp]; } },
+      { n: 150, pixel: (f) => [0.66 - eB * 0.18 + f * 0.06, 0.9, clampv(eL * 0.45 + eB * eB * 0.5)] },
+    ]; },
+  }; })(),
+  'crossed-spectrum': (() => { let env = []; return {
+    before(dt) { const n = spectrum.length; if (env.length !== n) env = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150); },
+    rows() { const n = env.length || 1; const sq = b => { const e = env[b] || 0; return clampv(e * e); }; return [
+      { n: 300, pixel: (f) => { let b = Math.floor(f * n); if (b >= n) b = n - 1;
+        return [0.66 - (b / Math.max(1, n - 1)) * 0.66, 1, sq(b)]; } },
+      { n: 150, pixel: (f) => { const m = Math.abs(f - 0.5) * 2; let b = Math.floor(m * n); if (b >= n) b = n - 1;
+        return [(b / Math.max(1, n - 1)) * 0.66, 1, sq(b)]; } },
+    ]; },
+  }; })(),
+  'moire-ripple': (() => { let eBeat = 0, eL = 0, eT = 0, phase = 0; const CYCLES = 10;
+    const ripple = (f) => { const dc = Math.abs(f - 0.5) * 2, w = wave(dc * CYCLES - phase);
+      return [0.55 + dc * 0.25 - eBeat * 0.15 + eT * 0.1, 1, clampv(w * w * (0.2 + eBeat * 0.9 + eL * 0.4))]; };
+    return {
+    before(dt) { eBeat = envF(beatPulse, eBeat, dt, 140); eL = envF(bands.level, eL, dt, 300); eT = envF(bands.treble, eT, dt, 250);
+      phase += dt / 1000 * (1.5 + eL * 4 + eBeat * 6); },
+    rows() { return [{ n: 300, pixel: ripple }, { n: 150, pixel: ripple }]; },
+  }; })(),
+  'chunky-vu-spectrum': (() => { let env = [], eL = 0, peak = 0; return {
+    before(dt) { const n = spectrum.length; if (env.length !== n) env = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150);
+      eL = envF(bands.level, eL, dt, 120); peak = eL > peak ? eL : Math.max(eL, peak - dt / 1200); },
+    rows() { const n = env.length || 1; return [
+      { n: 300, pixel: (f) => { let b = Math.floor(f * n); if (b >= n) b = n - 1;
+        const e = env[b] || 0; return [0.66 - (b / Math.max(1, n - 1)) * 0.66, 1, clampv(e * e)]; } },
+      { n: 150, pixel: (f, i, m) => { const peakLo = peak - 1 / Math.max(1, m);
+        if (f <= peak && f > peakLo) return [0.33 * (1 - peak), 0.4, 1];
+        if (f < eL) return [0.33 * (1 - f), 1, 1];
+        return [0, 0, 0]; } },
+    ]; },
+  }; })(),
 };
 
 // HSV (0..1) → css rgb, hue wraps — mirrors the device's hsv().
@@ -316,6 +367,21 @@ function drawStrip(dt) {
   const h = strip.height = strip.clientHeight * devicePixelRatio;
   const pat = PREVIEW[$('preview').value]; if (!pat) return;
   pat.before(dt);
+  // Two-strip patterns expose rows() = [{n, pixel}, …]; draw each as a stacked
+  // row at its real pixel count so the density mismatch (and its moiré) shows.
+  if (pat.rows) {
+    const rows = pat.rows(), rh = h / rows.length;
+    rows.forEach((row, r) => {
+      const pw = w / row.n;
+      for (let i = 0; i < row.n; i++) {
+        const f = row.n > 1 ? i / (row.n - 1) : 0;
+        const [hh, ss, vv] = row.pixel(f, i, row.n);
+        sctx.fillStyle = hsv2rgb(hh, ss, vv);
+        sctx.fillRect(i * pw, r * rh, pw + 1, rh + 1);
+      }
+    });
+    return;
+  }
   const n = P.pixels, pw = w / n;
   for (let i = 0; i < n; i++) {
     const f = n > 1 ? i / (n - 1) : 0;
