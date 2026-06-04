@@ -21,20 +21,14 @@ function envelope(target, current, delta, fall) {
   return target > current ? target : current + (target - current) * min(1, delta / fall)
 }
 
-// per-pixel sparkle brightness (0..1), (re)sized once pixelCount is known.
-var spark = array(0)
-var lastCount = 0
+// per-pixel sparkle brightness (0..1). pixelCount is known at init and Pixelblaze
+// arrays are fixed-size (can't grow at runtime), so allocate the buffer here.
+var spark = array(pixelCount)
 
 export function beforeRender(delta) {
   eBass   = envelope(bass,   eBass,   delta, 150)
   eTreble = envelope(treble, eTreble, delta, 80)   // snappy: cymbals are transient
   eLevel  = envelope(level,  eLevel,  delta, 200)
-
-  // (re)size the spark buffer if the strip length is now known/changed.
-  if (pixelCount != lastCount) {
-    spark = array(pixelCount)
-    lastCount = pixelCount
-  }
 
   // decay every pixel's sparkle (~150 ms to fade out).
   var decay = 1 - min(1, delta / 150)

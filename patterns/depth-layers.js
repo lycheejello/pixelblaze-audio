@@ -21,8 +21,11 @@ export var level = 0
 
 var env = array(NBANDS)
 var eBass = 0, eTreble = 0, eLevel = 0
-var spark = array(0)               // per-pixel sparkle, dense strip only
-var lastCount = 0
+// pixelCount is the device's TOTAL pixel count and is known at init, so size the
+// buffer from it directly. (Pixelblaze arrays are fixed-size — you can't grow one
+// at runtime, which is why we allocate here, not in beforeRender.) The dense strip
+// only uses indices 0..N0-1, but allocating the full length keeps indexing trivial.
+var spark = array(pixelCount)      // per-pixel sparkle, dense strip only
 
 function envelope(target, current, delta, fall) {
   return target > current ? target : current + (target - current) * min(1, delta / fall)
@@ -34,7 +37,6 @@ export function beforeRender(delta) {
   eTreble = envelope(treble, eTreble, delta, 80)    // snappy for cymbals
   eLevel  = envelope(level,  eLevel,  delta, 350)   // slow, dreamy background
 
-  if (pixelCount != lastCount) { spark = array(pixelCount); lastCount = pixelCount }
   var decay  = 1 - min(1, delta / 150)
   var ignite = eTreble > 0.08 ? eTreble * eTreble * 0.5 : 0
   for (var i = 0; i < N0; i++) {                     // sparkle only on the foreground
