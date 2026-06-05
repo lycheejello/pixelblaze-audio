@@ -105,7 +105,8 @@
 <script type="module">
 const P = { gain: 1.8, smooth: 0.7, rateHz: 22, nbands: 16, beatSens: 2.0, pixels: 60 };
 // depth-layers-mirror spectrum knobs (mirror of the pattern's exported vars).
-const DLM = { midShrink: 2.6, warmBias: 0.7, hueEnd: 0.03, hfTilt: 1.8, gamma: 2.6, attack: 0.6, sparkleRate: 0.3 };
+const DLM = { midShrink: 1.1, warmBias: 1.24, hueEnd: 0.01, hfTilt: 1.8, gamma: 1.6, attack: 0.1, idleBright: 0.6, sparkleRate: 0.25 };
+try { Object.assign(DLM, JSON.parse(localStorage.getItem('dlm') || '{}')); } catch (e) {}   // restore saved tuning
 
 const $ = id => document.getElementById(id);
 let ws = null, audioCtx = null, analyser = null, freq = null;
@@ -357,7 +358,7 @@ const PREVIEW = {
   'depth-layers-mirror': (() => { let env = [], base = [], vis = [], eB = 0, eM = 0, eT = 0, eL = 0, eBeat = 0, tS = 0, phase = 0, idle = 0, iPhase = 0, spark = new Array(300).fill(0);
     // same as depth-layers but fed FOLDED position (fm) so everything mirrors about center.
     const withIdle = (fm, ah, asat, av) => { if (idle > 0.01) {
-        const iw = (wave(fm * 0.7 - iPhase) + wave(fm * 0.4 + iPhase * 0.6)) * 0.5, iv = idle * (0.04 + 0.16 * iw);
+        const iw = (wave(fm * 0.7 - iPhase) + wave(fm * 0.4 + iPhase * 0.6)) * 0.5, iv = idle * (0.06 + DLM.idleBright * iw);
         if (iv > av) return [0.6 + 0.12 * wave(iPhase * 0.5 + fm * 0.2), 0.85, iv];
       } return [ah, asat, av]; };
     return {
@@ -462,16 +463,16 @@ function drawStrip(dt) {
 
 // ── sliders ────────────────────────────────────────────────────────────────
 const SLIDERS = [
-  ['gain', 'gain', 0.5, 4, 0.1],
-  ['smoothing', 'smooth', 0, 0.95, 0.05],
-  ['send rate Hz', 'rateHz', 10, 60, 1],
-  ['bands', 'nbands', 8, 64, 1],
-  ['beat sens', 'beatSens', 1, 4, 0.1],
-  ['preview px', 'pixels', 8, 300, 1],
+  ['gain', 'gain', 0.5, 4, 0.1, 'Input gain on the FFT bands before clipping.'],
+  ['smoothing', 'smooth', 0, 0.95, 0.05, 'FFT temporal smoothing — lower = snappier, higher = smoother but laggier.'],
+  ['send rate Hz', 'rateHz', 10, 60, 1, 'Times/sec values are sent to the Pixelblaze. Lower this if the strip lags behind.'],
+  ['bands', 'nbands', 8, 64, 1, "Number of spectrum bands. Must match the device pattern's NBANDS."],
+  ['beat sens', 'beatSens', 1, 4, 0.1, 'Beat-detection threshold — lower = more beats detected, higher = only strong hits.'],
+  ['preview px', 'pixels', 8, 300, 1, 'Preview strip resolution (single-strip patterns only).'],
 ];
 const box = $('sliders');
-for (const [label, k, min, max, step] of SLIDERS) {
-  const l = document.createElement('label'); l.className = 'sld';
+for (const [label, k, min, max, step, help] of SLIDERS) {
+  const l = document.createElement('label'); l.className = 'sld'; l.title = help; l.style.cursor = 'help';
   const s1 = document.createElement('span'); s1.textContent = label;
   const inp = document.createElement('input'); inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step; inp.value = P[k];
   const s2 = document.createElement('span'); s2.textContent = P[k];
@@ -485,29 +486,39 @@ for (const [label, k, min, max, step] of SLIDERS) {
 // ── depth-layers-mirror tuning panel (shown only when it's the active preview) ─
 const dlmBox = $('dlm-panel');
 const DLM_SLIDERS = [
-  ['mid shrink',  'midShrink',   1,   4,    0.1],
-  ['warm bias',   'warmBias',    0.4, 1.5,  0.05],
-  ['warm hue',    'hueEnd',      0,   0.12, 0.005],
-  ['treble tilt', 'hfTilt',      0,   3,    0.1],
-  ['contrast',    'gamma',       1,   4,    0.1],
-  ['kick attack', 'attack',      0,   1,    0.05],
-  ['sparkle',     'sparkleRate', 0,   0.8,  0.05],
+  ['mid shrink',  'midShrink',   1,   4,    0.1,   'Shrinks the green middle, fattens the blue center & red ends.'],
+  ['warm bias',   'warmBias',    0.4, 1.5,  0.05,  '<1 = more red/orange; ~1 brings more blue back into the middle.'],
+  ['warm hue',    'hueEnd',      0,   0.12, 0.005, 'Color of the strip ends: 0 = red, higher = orange.'],
+  ['treble tilt', 'hfTilt',      0,   3,    0.1,   'Brightness lift toward the strip ends (the treble bands).'],
+  ['contrast',    'gamma',       1,   4,    0.1,   'Brightness contrast — higher = darker darks, punchier peaks.'],
+  ['kick attack', 'attack',      0,   1,    0.05,  '0 = center follows bass level; higher = center tracks the kick onset (darker between hits).'],
+  ['idle glow',   'idleBright',  0,   1,    0.05,  'Brightness of the ambient aurora when there is no audio.'],
+  ['sparkle',     'sparkleRate', 0,   0.8,  0.05,  'Density of white sparkles on treble hits (foreground only).'],
 ];
 const dlmHdr = document.createElement('div'); dlmHdr.className = 'k';
-dlmHdr.textContent = 'depth-layers-mirror — live (also streams to the device if connected)';
+dlmHdr.textContent = 'depth-layers-mirror — live (streams to the device if connected) · hover a slider for help';
 dlmBox.appendChild(dlmHdr);
-for (const [label, k, min, max, step] of DLM_SLIDERS) {
-  const l = document.createElement('label'); l.className = 'sld';
+for (const [label, k, min, max, step, help] of DLM_SLIDERS) {
+  const l = document.createElement('label'); l.className = 'sld'; l.title = help; l.style.cursor = 'help';
   const s1 = document.createElement('span'); s1.textContent = label;
   const inp = document.createElement('input'); inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step; inp.value = DLM[k];
   const s2 = document.createElement('span'); s2.textContent = DLM[k];
   inp.oninput = () => {
     DLM[k] = parseFloat(inp.value); s2.textContent = DLM[k];
+    localStorage.setItem('dlm', JSON.stringify(DLM));   // app remembers across reloads
     // push the change straight to the device (no-op for other active patterns).
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ setVars: { [k]: DLM[k] } }));
   };
   l.append(s1, inp, s2); dlmBox.appendChild(l);
 }
+// "copy settings" → ready-to-paste export-var defaults for the device pattern.
+const dlmCopy = document.createElement('button'); dlmCopy.textContent = 'copy settings';
+dlmCopy.onclick = () => {
+  const txt = Object.entries(DLM).map(([k, v]) => `export var ${k} = ${v}`).join('\n');
+  navigator.clipboard?.writeText(txt);
+  dlmCopy.textContent = 'copied! (paste into the pattern)'; setTimeout(() => dlmCopy.textContent = 'copy settings', 1500);
+};
+dlmBox.appendChild(dlmCopy);
 function syncDlmPanel() { dlmBox.style.display = $('preview').value === 'depth-layers-mirror' ? '' : 'none'; }
 $('preview').addEventListener('change', syncDlmPanel);
 syncDlmPanel();

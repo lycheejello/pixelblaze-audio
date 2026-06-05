@@ -15,18 +15,19 @@ var N0 = 300                       // out0 (dense) pixel count; out1 = pixelCoun
 var NBANDS = 16                    // must equal the app's band count
 // Spectrum tunables — exported so the streamer app's slider panel (and the
 // Pixelblaze Vars UI) can adjust them live. Defaults below apply until overridden.
-export var sparkleRate = 0.3       // sparkle density on treble HITS; lower = calmer (0 = off)
-export var midShrink = 2.6         // S-curve exponent: 1 = even; higher = shorter green
+export var sparkleRate = 0.25      // sparkle density on treble HITS; lower = calmer (0 = off)
+export var midShrink = 1.1         // S-curve exponent: 1 = even; higher = shorter green
                                    // middle, fatter blue (center) & red (end) zones
-export var hueEnd = 0.03           // warm-end hue: 0 = red, ~0.08 = orange
-export var warmBias = 0.7          // <1 = redder (warm colors take more of the spectrum)
+export var hueEnd = 0.01           // warm-end hue: 0 = red, ~0.08 = orange
+export var warmBias = 1.24         // <1 = redder (warm colors take more of the spectrum)
 export var hfTilt = 1.8            // treble (strip-end) brightness lift; 0 = flat
-export var gamma = 2.6            // brightness contrast; higher = darker darks (2 = square)
+export var gamma = 1.6            // brightness contrast; higher = darker darks (2 = square)
 export var ledGamma = 2.2         // LED gamma correction so the strip's contrast matches the
                                   // (monitor-gamma'd) preview. 1 = off; raise if the strip looks washed
 export var black = 0.06           // black point: values below this are crushed to truly off, so
                                   // faint lows don't glow (esp. the blue center) on the LEDs
-export var attack = 0.6           // 0 = follows bass LEVEL; 1 = only the kick/onset — subtracts a
+export var idleBright = 0.6       // idle/no-sound aurora brightness (before LED gamma/black point)
+export var attack = 0.1           // 0 = follows bass LEVEL; 1 = only the kick/onset — subtracts a
                                   // slow per-band baseline (weighted to the low end) so a steady
                                   // bassline stops keeping the center lit
 export var bands = array(NBANDS)
@@ -138,7 +139,7 @@ export function render(index) {
   // idle aurora: soft breathing glow, also symmetric (driven by warped position).
   if (idle > 0.01) {
     var iw = (wave(fw * 0.7 - idlePhase) + wave(fw * 0.4 + idlePhase * 0.6)) * 0.5
-    var iv = idle * (0.04 + 0.16 * iw)
+    var iv = idle * (0.06 + idleBright * iw)
     if (iv > av) {
       av = iv
       ah = 0.6 + 0.12 * wave(idlePhase * 0.5 + fw * 0.2)
