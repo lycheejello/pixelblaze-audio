@@ -24,6 +24,8 @@ export var hfTilt = 1.8            // treble (strip-end) brightness lift; 0 = fl
 export var gamma = 2.6            // brightness contrast; higher = darker darks (2 = square)
 export var ledGamma = 2.2         // LED gamma correction so the strip's contrast matches the
                                   // (monitor-gamma'd) preview. 1 = off; raise if the strip looks washed
+export var black = 0.06           // black point: values below this are crushed to truly off, so
+                                  // faint lows don't glow (esp. the blue center) on the LEDs
 export var attack = 0.6           // 0 = follows bass LEVEL; 1 = only the kick/onset — subtracts a
                                   // slow per-band baseline (weighted to the low end) so a steady
                                   // bassline stops keeping the center lit
@@ -144,5 +146,6 @@ export function render(index) {
     }
   }
 
-  hsv(ah, asat, pow(av, ledGamma))   // LED gamma correction (see ledGamma above)
+  av = clamp((av - black) / (1 - black), 0, 1)   // black point: crush faint lows to off
+  hsv(ah, asat, pow(av, ledGamma))               // LED gamma correction (see ledGamma above)
 }
