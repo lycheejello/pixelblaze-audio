@@ -1,19 +1,29 @@
-// depth-layers.js — TWO-STRIP pattern (Output Expander). Treats the two strips
-// as physically-aligned LAYERS at different resolutions: the dense strip is the
-// crisp FOREGROUND, the sparse strip is a soft, blurry BACKGROUND wash.
+// depth-layers-mirror.js — symmetrical version of depth-layers.js. Same two-strip
+// foreground/background concept and the same audio tuning, but every layout folds
+// around the CENTER: bass blooms from the middle and radiates out to both ends,
+// mirrored. (depth-layers.js is the linear, bass-at-one-end version.)
 //
 // Wiring (this install): expander out0 = 300 px (dense), out1 = 150 px (sparse),
-// same physical length → out1 has half the pixel pitch. The expander presents
-// one continuous index space: 0..299 = out0, 300..449 = out1. Edit N0 if yours
-// differs. Single active pattern, so setVars lands here (see ../index.html).
+// same physical length. One continuous index space: 0..299 = out0, 300..449 =
+// out1. Edit N0 if yours differs. Single active pattern, so setVars lands here
+// (see ../index.html).
 //
-// Foreground (dense): N-band spectrum with white treble sparkles on top.
-// Background (sparse): slow color wash that blooms with bass and drifts with
-// level — low resolution makes it read as an out-of-focus glow behind the detail.
+// Foreground (dense): N-band spectrum mirrored around center + icy treble sparkles.
+// Background (sparse): slow wash whose flow + bloom are symmetric around center.
 
 var N0 = 300                       // out0 (dense) pixel count; out1 = pixelCount - N0
 var NBANDS = 16                    // must equal the app's band count
-var sparkleRate = 0.3              // sparkle density on treble HITS; lower = calmer (0 = off)
+// Spectrum tunables — exported so the streamer app's slider panel (and the
+// Pixelblaze Vars UI) can adjust them live. Defaults below apply until overridden.
+export var sparkleRate = 0.3       // sparkle density on treble HITS; lower = calmer (0 = off)
+export var midShrink = 2.6         // S-curve exponent: 1 = even; higher = shorter green
+                                   // middle, fatter blue (center) & red (end) zones
+export var hueEnd = 0.03           // warm-end hue: 0 = red, ~0.08 = orange
+export var warmBias = 0.7          // <1 = redder (warm colors take more of the spectrum)
+export var hfTilt = 1.8            // treble (strip-end) brightness lift; 0 = flat
+export var gamma = 2.6            // brightness contrast; higher = darker darks (2 = square)
+export var ledGamma = 2.2         // LED gamma correction so the strip's contrast matches the
+                                  // (monitor-gamma'd) preview. 1 = off; raise if the strip looks washed
 export var bands = array(NBANDS)
 export var bass = 0
 export var mid = 0
@@ -34,6 +44,12 @@ var spark = array(pixelCount)      // per-pixel sparkle, dense strip only
 
 function envelope(target, current, delta, fall) {
   return target > current ? target : current + (target - current) * min(1, delta / fall)
+}
+
+// symmetric S-curve on 0..1: lingers near 0 and 1, steep through the middle, so
+// the spectral extremes (blue/red) get more length and the green middle shrinks.
+function scurve(x, k) {
+  return x < 0.5 ? 0.5 * pow(2 * x, k) : 1 - 0.5 * pow(2 * (1 - x), k)
 }
 
 export function beforeRender(delta) {
@@ -68,49 +84,50 @@ export function beforeRender(delta) {
 }
 
 export function render(index) {
-  // ah/asat/av = the audio-driven color for this pixel; idle aurora blends in below.
-  var f, ah, asat, av
+  // ah/asat/av = the audio-driven color; fm = position FOLDED around the center
+  // (0 at the middle → 1 at both ends), which is what makes this the mirror.
+  // fw = folded position warped so the center is narrow and the ends are wide.
+  var f, fm, fw, ah, asat, av
   if (index < N0) {
-    // FOREGROUND (dense): spectrum bars + icy treble sparkles.
+    // FOREGROUND (dense): spectrum mirrored around center + icy treble sparkles.
     f = N0 > 1 ? index / (N0 - 1) : 0
-    // interpolate between adjacent bands so the spectrum is a smooth gradient
-    // rather than NBANDS hard color blocks.
-    var bf = f * (NBANDS - 1)
+    fm = abs(f - 0.5) * 2
+    fw = scurve(fm, midShrink)
+    // interpolate between adjacent bands for a smooth gradient (no hard blocks).
+    var bf = fw * (NBANDS - 1)
     var b0 = floor(bf); var frac = bf - b0
     var b1 = b0 + 1; if (b1 > NBANDS - 1) b1 = NBANDS - 1
     var lin = env[b0] * (1 - frac) + env[b1] * frac
-    // high-frequency tilt: treble bands carry little energy, so lift them (up to
-    // ~2.8× at the top) — otherwise the red end of the spectrum stays dim/tiny.
-    var g = lin * (1 + f * 1.8)
-    var amp = clamp(g * g, 0, 1)
+    // high-frequency tilt: lift the dim treble bands (now at the strip ends).
+    var g = lin * (1 + fw * hfTilt)
+    var amp = clamp(pow(g, gamma), 0, 1)
     var s = spark[index]
     if (s > 0.01) { ah = 0.6; asat = 1 - s * 0.75; av = max(amp, s * 0.85) }  // icy accent, never pure white
-    else          { ah = 0.66 - f * 0.66; asat = 1; av = amp }                // smooth hue ramp
+    else          { ah = 0.66 - pow(fw, warmBias) * (0.66 - hueEnd); asat = 1; av = amp }  // blue center → red ends, warm-biased
   } else {
-    // BACKGROUND (sparse): a slow flowing field — a traveling brightness wave so
-    // it's alive even at steady level, blooming on bass, lifted by mids.
+    // BACKGROUND (sparse): slow flowing field, symmetric around center.
     var n1 = pixelCount - N0
     f = n1 > 1 ? (index - N0) / (n1 - 1) : 0
-    var w = wave(f * 1.5 - bgPhase)                  // 1.5 slow waves drifting along
+    fm = abs(f - 0.5) * 2
+    fw = scurve(fm, midShrink)
+    var w = wave(fw * 1.5 - bgPhase)                  // waves travel out from center
     var bamp = eLevel * 0.4 + eMid * 0.25 + eBass * eBass * 0.5
-    av = clamp(bamp * (0.35 + 0.65 * w), 0, 1)       // wave carves moving bright/dark
-    // tight blue → violet (bass nudges toward purple); kept narrow so the wash
-    // breathes within one color family instead of cycling like a rainbow.
-    ah = 0.64 + eBass * 0.1 + f * 0.03 + wave(bgPhase * 0.3) * 0.03
+    av = clamp(bamp * (0.35 + 0.65 * w), 0, 1)
+    // tight blue → violet, narrow so the wash stays one color family.
+    ah = 0.64 + eBass * 0.1 + fw * 0.03 + wave(bgPhase * 0.3) * 0.03
     asat = 0.9
   }
 
-  // idle aurora: two slow counter-drifting waves → a soft breathing glow, deep
-  // blue↔purple. Shows through wherever it's brighter than the (near-zero) audio.
+  // idle aurora: soft breathing glow, also symmetric (driven by warped position).
   if (idle > 0.01) {
-    var iw = (wave(f * 0.7 - idlePhase) + wave(f * 0.4 + idlePhase * 0.6)) * 0.5
+    var iw = (wave(fw * 0.7 - idlePhase) + wave(fw * 0.4 + idlePhase * 0.6)) * 0.5
     var iv = idle * (0.04 + 0.16 * iw)
     if (iv > av) {
       av = iv
-      ah = 0.6 + 0.12 * wave(idlePhase * 0.5 + f * 0.2)
+      ah = 0.6 + 0.12 * wave(idlePhase * 0.5 + fw * 0.2)
       asat = 0.85
     }
   }
 
-  hsv(ah, asat, av)
+  hsv(ah, asat, pow(av, ledGamma))   // LED gamma correction (see ledGamma above)
 }

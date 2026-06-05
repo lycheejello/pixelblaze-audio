@@ -96,6 +96,7 @@ them in the **strip preview** (they render as two stacked rows at the real count
 | pattern | what it does | plays best with |
 |---------|--------------|-----------------|
 | `depth-layers.js` | dense = crisp spectrum + treble sparkle; sparse = soft, blurry bass/level color wash behind | layered, atmospheric mixes — house, melodic techno, synthwave |
+| `depth-layers-mirror.js` | same as depth-layers, folded around center — bass blooms from the middle out to both ends | center-mounted / symmetric installs wanting depth-layers' look |
 | `crossed-spectrum.js` | dense = linear spectrum (bass→treble); sparse = mirrored (bass center) — a kick spreads across both | beat-forward music where you want the low end to "open out" |
 | `moire-ripple.js` | same outward ripple on both; differing pitch makes the wavefronts shimmer in/out of phase, hardest on drops | big builds & drops — dubstep, DnB, festival EDM |
 | `chunky-vu-spectrum.js` | dense = fine N-band spectrum; sparse = fat VU bar with peak-hold | dynamic material — rock, live sets, loud-quiet-loud |
@@ -129,6 +130,7 @@ patterns/
   sparkle.js        # treble twinkle over a bass-tinted base
   # two-strip (Output Expander, out0=300px dense + out1=150px sparse):
   depth-layers.js       # crisp spectrum/sparkle front + blurry bass wash behind
+  depth-layers-mirror.js # depth-layers folded around center (bass-in-middle)
   crossed-spectrum.js   # linear spectrum (dense) crossed with mirrored (sparse)
   moire-ripple.js       # one ripple, two pitches → interference shimmer
   chunky-vu-spectrum.js # fine spectrum (dense) + fat VU bar (sparse)
