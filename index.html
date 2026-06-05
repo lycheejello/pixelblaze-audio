@@ -81,6 +81,7 @@
       <option value="plasma">plasma.js</option>
       <option value="sparkle">sparkle.js</option>
       <option value="depth-layers">depth-layers.js (2-strip)</option>
+      <option value="depth-layers-mirror">depth-layers-mirror.js (2-strip)</option>
       <option value="crossed-spectrum">crossed-spectrum.js (2-strip)</option>
       <option value="moire-ripple">moire-ripple.js (2-strip)</option>
       <option value="chunky-vu-spectrum">chunky-vu-spectrum.js (2-strip)</option>
@@ -88,6 +89,7 @@
     <span class="k">— JS mirror of the device pattern (local preview only)</span>
   </div>
   <canvas id="strip"></canvas>
+  <div id="dlm-panel" style="display:none"></div>
 
   <div class="note">
     1. Load <code>patterns/reactive.js</code> (scalar bands) or <code>patterns/spectrum.js</code>
@@ -102,11 +104,14 @@
 
 <script type="module">
 const P = { gain: 1.8, smooth: 0.7, rateHz: 40, nbands: 16, beatSens: 2.0, pixels: 60 };
+// depth-layers-mirror spectrum knobs (mirror of the pattern's exported vars).
+const DLM = { midShrink: 2.6, warmBias: 0.7, hueEnd: 0.03, hfTilt: 1.8, gamma: 2.6, sparkleRate: 0.3 };
 
 const $ = id => document.getElementById(id);
 let ws = null, audioCtx = null, analyser = null, freq = null;
 let bands = { bass:0, mid:0, treble:0, level:0 };
 let spectrum = [];          // N log-spaced 0..1 bands, recomputed each frame
+let specPeak = [];          // per-band rolling peak, for auto-gain (AGC)
 let lastSend = 0, lastT = 0;
 
 // ── beat detection (bass-flux over a rolling window) ───────────────────────
@@ -134,6 +139,7 @@ let bandEdges = [];
 function rebuildBandEdges() {
   const n = P.nbands, lo = 20, hi = 16000;
   bandEdges = [];
+  specPeak = [];            // reset auto-gain peaks when the band count changes
   for (let i = 0; i <= n; i++) bandEdges.push(lo * Math.pow(hi / lo, i / n));
 }
 rebuildBandEdges();
@@ -196,6 +202,14 @@ function bandEnergy(loHz, hiHz) {
   for (let i = lo; i < hi && i < bins; i++) { s += freq[i]; n++; }
   return n ? Math.min(1, (s / n / 255) * P.gain) : 0;
 }
+// same average but raw (no gain, no clip) — input for the spectrum's per-band AGC.
+function bandEnergyRaw(loHz, hiHz) {
+  const bins = analyser.frequencyBinCount, nyq = audioCtx.sampleRate / 2;
+  let lo = Math.floor(loHz / nyq * bins), hi = Math.ceil(hiHz / nyq * bins);
+  let s = 0, n = 0;
+  for (let i = lo; i < hi && i < bins; i++) { s += freq[i]; n++; }
+  return n ? s / n / 255 : 0;
+}
 
 // ── main loop: analyze, draw, stream ───────────────────────────────────────
 function loop(t) {
@@ -203,15 +217,22 @@ function loop(t) {
   if (analyser) {
     if (analyser.smoothingTimeConstant !== P.smooth) analyser.smoothingTimeConstant = P.smooth;
     analyser.getByteFrequencyData(freq);
+    const dt = lastT ? t - lastT : 16; lastT = t;
     bands.bass   = bandEnergy(20, 250);
     bands.mid    = bandEnergy(250, 2000);
     bands.treble = bandEnergy(2000, 8000);
     bands.level  = bandEnergy(20, 16000);
-    // N log-spaced spectrum bands, reusing bandEnergy() for each edge pair.
+    // N log-spaced spectrum bands with per-band auto-gain (AGC): divide each band
+    // by its own slowly-decaying peak so loud bands (esp. bass) don't clip to a
+    // flat 1.0 — every band then uses its full 0..1 range and stays dynamic.
     spectrum = [];
-    for (let i = 0; i < P.nbands; i++) spectrum.push(bandEnergy(bandEdges[i], bandEdges[i + 1]));
+    for (let i = 0; i < P.nbands; i++) {
+      const raw = bandEnergyRaw(bandEdges[i], bandEdges[i + 1]);
+      const p = specPeak[i] || 0;
+      specPeak[i] = raw > p ? raw : Math.max(raw, p - p * dt / 8000);   // slow peak decay
+      spectrum.push(Math.min(1, raw / Math.max(specPeak[i], 0.05)));    // normalize to peak
+    }
     // beat detection + frame-rate-independent pulse decay (~120 ms).
-    const dt = lastT ? t - lastT : 16; lastT = t;
     detectBeat(t);
     beatPulse *= Math.exp(-dt / 120);
     draw();
@@ -250,6 +271,7 @@ function meters() {
 const strip = $('strip'), sctx = strip.getContext('2d');
 const envF = (target, cur, dt, fall) => target > cur ? target : cur + (target - cur) * Math.min(1, dt / fall);
 const wave = u => (Math.sin(u * 2 * Math.PI) + 1) / 2;             // matches PB wave()
+const scurve = (x, k) => x < 0.5 ? 0.5 * Math.pow(2 * x, k) : 1 - 0.5 * Math.pow(2 * (1 - x), k);
 const clampv = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
 
 const PREVIEW = {
@@ -303,20 +325,54 @@ const PREVIEW = {
 
   // Two-strip patterns: rows() returns [dense 300px, sparse 150px], drawn stacked
   // at their real counts so the density mismatch reads true (see drawStrip).
-  'depth-layers': (() => { let env = [], eB = 0, eM = 0, eT = 0, eL = 0, tS = 0, phase = 0, spark = new Array(300).fill(0); return {
+  'depth-layers': (() => { let env = [], eB = 0, eM = 0, eT = 0, eL = 0, tS = 0, phase = 0, idle = 0, iPhase = 0, spark = new Array(300).fill(0);
+    // idle aurora blended over the audio color, matching the device pattern.
+    const withIdle = (f, ah, asat, av) => { if (idle > 0.01) {
+        const iw = (wave(f * 0.7 - iPhase) + wave(f * 0.4 + iPhase * 0.6)) * 0.5, iv = idle * (0.04 + 0.16 * iw);
+        if (iv > av) return [0.6 + 0.12 * wave(iPhase * 0.5 + f * 0.2), 0.85, iv];
+      } return [ah, asat, av]; };
+    return {
     before(dt) { const n = spectrum.length; if (env.length !== n) env = new Array(n).fill(0);
       for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150);
       eB = envF(bands.bass, eB, dt, 150); eM = envF(bands.mid, eM, dt, 250); eT = envF(bands.treble, eT, dt, 80); eL = envF(bands.level, eL, dt, 350);
       phase += dt / 1000 * (0.05 + eL * 0.4);
+      const act = Math.max(eL, eB, eT), idleTarget = act < 0.03 ? 1 : 0;
+      idle += (idleTarget - idle) * Math.min(1, dt / (idleTarget > idle ? 4500 : 300));
+      iPhase += dt / 1000 * 0.08;
       tS += (eT - tS) * Math.min(1, dt / 500);
       const transient = Math.max(0, eT - tS), decay = 1 - Math.min(1, dt / 120), ignite = transient > 0.04 ? transient * 0.3 : 0;
       for (let i = 0; i < 300; i++) { spark[i] *= decay; if (Math.random() < ignite) spark[i] = 1; } },
     rows() { const n = env.length || 1; return [
-      { n: 300, pixel: (f, i) => { let b = Math.floor(f * n); if (b >= n) b = n - 1;
-        const g = (env[b] || 0) * (1 + (b / Math.max(1, n - 1)) * 1.8), amp = clampv(g * g), h = 0.66 - (b / Math.max(1, n - 1)) * 0.66, s = spark[i] || 0;
-        return s > 0.01 ? [0.6, 1 - s * 0.75, Math.max(amp, s * 0.85)] : [h, 1, amp]; } },
+      { n: 300, pixel: (f, i) => { const bf = f * (n - 1), b0 = Math.floor(bf), frac = bf - b0, b1 = Math.min(b0 + 1, n - 1);
+        const lin = (env[b0] || 0) * (1 - frac) + (env[b1] || 0) * frac, g = lin * (1 + f * 1.8), amp = clampv(g * g), s = spark[i] || 0;
+        return s > 0.01 ? withIdle(f, 0.6, 1 - s * 0.75, Math.max(amp, s * 0.85)) : withIdle(f, 0.66 - f * 0.66, 1, amp); } },
       { n: 150, pixel: (f) => { const w = wave(f * 1.5 - phase), v = clampv((eL * 0.4 + eM * 0.25 + eB * eB * 0.5) * (0.35 + 0.65 * w));
-        return [0.66 - eB * 0.18 + f * 0.06 + wave(phase * 0.3) * 0.08, 0.9, v]; } },
+        return withIdle(f, 0.64 + eB * 0.1 + f * 0.03 + wave(phase * 0.3) * 0.03, 0.9, v); } },
+    ]; },
+  }; })(),
+  'depth-layers-mirror': (() => { let env = [], eB = 0, eM = 0, eT = 0, eL = 0, tS = 0, phase = 0, idle = 0, iPhase = 0, spark = new Array(300).fill(0);
+    // same as depth-layers but fed FOLDED position (fm) so everything mirrors about center.
+    const withIdle = (fm, ah, asat, av) => { if (idle > 0.01) {
+        const iw = (wave(fm * 0.7 - iPhase) + wave(fm * 0.4 + iPhase * 0.6)) * 0.5, iv = idle * (0.04 + 0.16 * iw);
+        if (iv > av) return [0.6 + 0.12 * wave(iPhase * 0.5 + fm * 0.2), 0.85, iv];
+      } return [ah, asat, av]; };
+    return {
+    before(dt) { const n = spectrum.length; if (env.length !== n) env = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150);
+      eB = envF(bands.bass, eB, dt, 150); eM = envF(bands.mid, eM, dt, 250); eT = envF(bands.treble, eT, dt, 80); eL = envF(bands.level, eL, dt, 350);
+      phase += dt / 1000 * (0.05 + eL * 0.4);
+      const act = Math.max(eL, eB, eT), idleTarget = act < 0.03 ? 1 : 0;
+      idle += (idleTarget - idle) * Math.min(1, dt / (idleTarget > idle ? 4500 : 300));
+      iPhase += dt / 1000 * 0.08;
+      tS += (eT - tS) * Math.min(1, dt / 500);
+      const transient = Math.max(0, eT - tS), decay = 1 - Math.min(1, dt / 120), ignite = transient > 0.04 ? transient * DLM.sparkleRate : 0;
+      for (let i = 0; i < 300; i++) { spark[i] *= decay; if (Math.random() < ignite) spark[i] = 1; } },
+    rows() { const n = env.length || 1; return [
+      { n: 300, pixel: (f, i) => { const fw = scurve(Math.abs(f - 0.5) * 2, DLM.midShrink), bf = fw * (n - 1), b0 = Math.floor(bf), frac = bf - b0, b1 = Math.min(b0 + 1, n - 1);
+        const lin = (env[b0] || 0) * (1 - frac) + (env[b1] || 0) * frac, g = lin * (1 + fw * DLM.hfTilt), amp = clampv(Math.pow(g, DLM.gamma)), s = spark[i] || 0;
+        return s > 0.01 ? withIdle(fw, 0.6, 1 - s * 0.75, Math.max(amp, s * 0.85)) : withIdle(fw, 0.66 - Math.pow(fw, DLM.warmBias) * (0.66 - DLM.hueEnd), 1, amp); } },
+      { n: 150, pixel: (f) => { const fw = scurve(Math.abs(f - 0.5) * 2, DLM.midShrink), w = wave(fw * 1.5 - phase), v = clampv((eL * 0.4 + eM * 0.25 + eB * eB * 0.5) * (0.35 + 0.65 * w));
+        return withIdle(fw, 0.64 + eB * 0.1 + fw * 0.03 + wave(phase * 0.3) * 0.03, 0.9, v); } },
     ]; },
   }; })(),
   'crossed-spectrum': (() => { let env = []; return {
@@ -415,6 +471,35 @@ for (const [label, k, min, max, step] of SLIDERS) {
   };
   l.append(s1, inp, s2); box.appendChild(l);
 }
+
+// ── depth-layers-mirror tuning panel (shown only when it's the active preview) ─
+const dlmBox = $('dlm-panel');
+const DLM_SLIDERS = [
+  ['mid shrink',  'midShrink',   1,   4,    0.1],
+  ['warm bias',   'warmBias',    0.4, 1.5,  0.05],
+  ['warm hue',    'hueEnd',      0,   0.12, 0.005],
+  ['treble tilt', 'hfTilt',      0,   3,    0.1],
+  ['contrast',    'gamma',       1,   4,    0.1],
+  ['sparkle',     'sparkleRate', 0,   0.8,  0.05],
+];
+const dlmHdr = document.createElement('div'); dlmHdr.className = 'k';
+dlmHdr.textContent = 'depth-layers-mirror — live (also streams to the device if connected)';
+dlmBox.appendChild(dlmHdr);
+for (const [label, k, min, max, step] of DLM_SLIDERS) {
+  const l = document.createElement('label'); l.className = 'sld';
+  const s1 = document.createElement('span'); s1.textContent = label;
+  const inp = document.createElement('input'); inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step; inp.value = DLM[k];
+  const s2 = document.createElement('span'); s2.textContent = DLM[k];
+  inp.oninput = () => {
+    DLM[k] = parseFloat(inp.value); s2.textContent = DLM[k];
+    // push the change straight to the device (no-op for other active patterns).
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ setVars: { [k]: DLM[k] } }));
+  };
+  l.append(s1, inp, s2); dlmBox.appendChild(l);
+}
+function syncDlmPanel() { dlmBox.style.display = $('preview').value === 'depth-layers-mirror' ? '' : 'none'; }
+$('preview').addEventListener('change', syncDlmPanel);
+syncDlmPanel();
 
 $('connect').onclick = connect;
 $('audio').onclick = startAudio;
