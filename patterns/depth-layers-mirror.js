@@ -24,14 +24,20 @@ export var hfTilt = 1.8            // treble (strip-end) brightness lift; 0 = fl
 export var gamma = 2.6            // brightness contrast; higher = darker darks (2 = square)
 export var ledGamma = 2.2         // LED gamma correction so the strip's contrast matches the
                                   // (monitor-gamma'd) preview. 1 = off; raise if the strip looks washed
+export var attack = 0.6           // 0 = follows bass LEVEL; 1 = only the kick/onset — subtracts a
+                                  // slow per-band baseline (weighted to the low end) so a steady
+                                  // bassline stops keeping the center lit
 export var bands = array(NBANDS)
 export var bass = 0
 export var mid = 0
 export var treble = 0
 export var level = 0
+export var beat = 0                 // kick-onset pulse from the app (1 on a hit, decays)
 
 var env = array(NBANDS)
-var eBass = 0, eMid = 0, eTreble = 0, eLevel = 0
+var base = array(NBANDS)            // slow per-band baseline (sustained level)
+var vis = array(NBANDS)             // env with the baseline subtracted → onset/attack
+var eBass = 0, eMid = 0, eTreble = 0, eLevel = 0, eBeat = 0
 var tSlow = 0                      // slow treble baseline, for transient detection
 var bgPhase = 0                    // slow drift for the background wash
 var idle = 0                       // 0 = music playing … 1 = idle ambient
@@ -53,11 +59,17 @@ function scurve(x, k) {
 }
 
 export function beforeRender(delta) {
-  for (var i = 0; i < NBANDS; i++) env[i] = envelope(bands[i], env[i], delta, 150)
+  for (var i = 0; i < NBANDS; i++) {
+    env[i] = envelope(bands[i], env[i], delta, 150)
+    base[i] = base[i] + (env[i] - base[i]) * min(1, delta / 400)   // slow baseline (~400 ms)
+    var lowW = 1 - i / (NBANDS - 1)                                // attack weighted to the low end
+    vis[i] = clamp(env[i] - attack * lowW * base[i], 0, 1)         // subtract sustained level
+  }
   eBass   = envelope(bass,   eBass,   delta, 150)
   eMid    = envelope(mid,    eMid,    delta, 250)
   eTreble = envelope(treble, eTreble, delta, 80)    // snappy for cymbals
   eLevel  = envelope(level,  eLevel,  delta, 350)   // slow, dreamy background
+  eBeat   = envelope(beat,   eBeat,   delta, 140)   // smooth the kick pulse a touch
   // background drifts slowly, faster when the track is loud — never fully static.
   bgPhase = bgPhase + delta / 1000 * (0.05 + eLevel * 0.4)
 
@@ -97,7 +109,10 @@ export function render(index) {
     var bf = fw * (NBANDS - 1)
     var b0 = floor(bf); var frac = bf - b0
     var b1 = b0 + 1; if (b1 > NBANDS - 1) b1 = NBANDS - 1
-    var lin = env[b0] * (1 - frac) + env[b1] * frac
+    var lin = vis[b0] * (1 - frac) + vis[b1] * frac
+    // blend the center toward the kick (beat) pulse — reliable onset, center-weighted.
+    var kickW = attack * (1 - fw)
+    lin = lin * (1 - kickW) + eBeat * eBeat * kickW
     // high-frequency tilt: lift the dim treble bands (now at the strip ends).
     var g = lin * (1 + fw * hfTilt)
     var amp = clamp(pow(g, gamma), 0, 1)

@@ -103,9 +103,9 @@
 </div>
 
 <script type="module">
-const P = { gain: 1.8, smooth: 0.7, rateHz: 40, nbands: 16, beatSens: 2.0, pixels: 60 };
+const P = { gain: 1.8, smooth: 0.7, rateHz: 22, nbands: 16, beatSens: 2.0, pixels: 60 };
 // depth-layers-mirror spectrum knobs (mirror of the pattern's exported vars).
-const DLM = { midShrink: 2.6, warmBias: 0.7, hueEnd: 0.03, hfTilt: 1.8, gamma: 2.6, sparkleRate: 0.3 };
+const DLM = { midShrink: 2.6, warmBias: 0.7, hueEnd: 0.03, hfTilt: 1.8, gamma: 2.6, attack: 0.6, sparkleRate: 0.3 };
 
 const $ = id => document.getElementById(id);
 let ws = null, audioCtx = null, analyser = null, freq = null;
@@ -121,8 +121,9 @@ let lastSend = 0, lastT = 0;
 const HIST = 43;            // ~1 s at 40 Hz
 let bassHist = [];
 let beatPulse = 0, lastBeat = 0;
-function detectBeat(now) {
-  const x = bands.bass;
+function detectBeat(now, x) {
+  // x = raw (unclipped) bass; the clipped scalar saturates on loud bass and
+  // flatlines its variance, which would stop beat detection from ever firing.
   let mean = 0; for (const v of bassHist) mean += v; mean /= (bassHist.length || 1);
   let varc = 0; for (const v of bassHist) varc += (v - mean) * (v - mean); varc /= (bassHist.length || 1);
   const std = Math.sqrt(varc);
@@ -158,6 +159,9 @@ function setWs(on, txt) { $('wsdot').classList.toggle('on', on); $('wsstat').tex
 
 function sendVars() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  // drop the frame if the socket is backed up, so latency can't snowball into a
+  // seconds-behind backlog that keeps playing after the audio stops.
+  if (ws.bufferedAmount > 512) return;
   ws.send(JSON.stringify({ setVars: {
     bass:   round(bands.bass),
     mid:    round(bands.mid),
@@ -233,7 +237,7 @@ function loop(t) {
       spectrum.push(Math.min(1, raw / Math.max(specPeak[i], 0.05)));    // normalize to peak
     }
     // beat detection + frame-rate-independent pulse decay (~120 ms).
-    detectBeat(t);
+    detectBeat(t, bandEnergyRaw(20, 250));
     beatPulse *= Math.exp(-dt / 120);
     draw();
     meters();
@@ -350,16 +354,20 @@ const PREVIEW = {
         return withIdle(f, 0.64 + eB * 0.1 + f * 0.03 + wave(phase * 0.3) * 0.03, 0.9, v); } },
     ]; },
   }; })(),
-  'depth-layers-mirror': (() => { let env = [], eB = 0, eM = 0, eT = 0, eL = 0, tS = 0, phase = 0, idle = 0, iPhase = 0, spark = new Array(300).fill(0);
+  'depth-layers-mirror': (() => { let env = [], base = [], vis = [], eB = 0, eM = 0, eT = 0, eL = 0, eBeat = 0, tS = 0, phase = 0, idle = 0, iPhase = 0, spark = new Array(300).fill(0);
     // same as depth-layers but fed FOLDED position (fm) so everything mirrors about center.
     const withIdle = (fm, ah, asat, av) => { if (idle > 0.01) {
         const iw = (wave(fm * 0.7 - iPhase) + wave(fm * 0.4 + iPhase * 0.6)) * 0.5, iv = idle * (0.04 + 0.16 * iw);
         if (iv > av) return [0.6 + 0.12 * wave(iPhase * 0.5 + fm * 0.2), 0.85, iv];
       } return [ah, asat, av]; };
     return {
-    before(dt) { const n = spectrum.length; if (env.length !== n) env = new Array(n).fill(0);
-      for (let i = 0; i < n; i++) env[i] = envF(spectrum[i] || 0, env[i], dt, 150);
+    before(dt) { const n = spectrum.length; if (env.length !== n) { env = new Array(n).fill(0); base = new Array(n).fill(0); vis = new Array(n).fill(0); }
+      for (let i = 0; i < n; i++) { env[i] = envF(spectrum[i] || 0, env[i], dt, 150);
+        base[i] = base[i] + (env[i] - base[i]) * Math.min(1, dt / 400);
+        const lowW = 1 - i / Math.max(1, n - 1);
+        vis[i] = clampv(env[i] - DLM.attack * lowW * base[i]); }
       eB = envF(bands.bass, eB, dt, 150); eM = envF(bands.mid, eM, dt, 250); eT = envF(bands.treble, eT, dt, 80); eL = envF(bands.level, eL, dt, 350);
+      eBeat = envF(beatPulse, eBeat, dt, 140);
       phase += dt / 1000 * (0.05 + eL * 0.4);
       const act = Math.max(eL, eB, eT), idleTarget = act < 0.03 ? 1 : 0;
       idle += (idleTarget - idle) * Math.min(1, dt / (idleTarget > idle ? 4500 : 300));
@@ -369,7 +377,9 @@ const PREVIEW = {
       for (let i = 0; i < 300; i++) { spark[i] *= decay; if (Math.random() < ignite) spark[i] = 1; } },
     rows() { const n = env.length || 1; return [
       { n: 300, pixel: (f, i) => { const fw = scurve(Math.abs(f - 0.5) * 2, DLM.midShrink), bf = fw * (n - 1), b0 = Math.floor(bf), frac = bf - b0, b1 = Math.min(b0 + 1, n - 1);
-        const lin = (env[b0] || 0) * (1 - frac) + (env[b1] || 0) * frac, g = lin * (1 + fw * DLM.hfTilt), amp = clampv(Math.pow(g, DLM.gamma)), s = spark[i] || 0;
+        let lin = (vis[b0] || 0) * (1 - frac) + (vis[b1] || 0) * frac;
+        const kickW = DLM.attack * (1 - fw); lin = lin * (1 - kickW) + eBeat * eBeat * kickW;
+        const g = lin * (1 + fw * DLM.hfTilt), amp = clampv(Math.pow(g, DLM.gamma)), s = spark[i] || 0;
         return s > 0.01 ? withIdle(fw, 0.6, 1 - s * 0.75, Math.max(amp, s * 0.85)) : withIdle(fw, 0.66 - Math.pow(fw, DLM.warmBias) * (0.66 - DLM.hueEnd), 1, amp); } },
       { n: 150, pixel: (f) => { const fw = scurve(Math.abs(f - 0.5) * 2, DLM.midShrink), w = wave(fw * 1.5 - phase), v = clampv((eL * 0.4 + eM * 0.25 + eB * eB * 0.5) * (0.35 + 0.65 * w));
         return withIdle(fw, 0.64 + eB * 0.1 + fw * 0.03 + wave(phase * 0.3) * 0.03, 0.9, v); } },
@@ -480,6 +490,7 @@ const DLM_SLIDERS = [
   ['warm hue',    'hueEnd',      0,   0.12, 0.005],
   ['treble tilt', 'hfTilt',      0,   3,    0.1],
   ['contrast',    'gamma',       1,   4,    0.1],
+  ['kick attack', 'attack',      0,   1,    0.05],
   ['sparkle',     'sparkleRate', 0,   0.8,  0.05],
 ];
 const dlmHdr = document.createElement('div'); dlmHdr.className = 'k';
