@@ -38,6 +38,13 @@ brew install blackhole-2ch
 (or grab the installer from <https://existential.audio/blackhole/>). Log out/in if
 it doesn't appear in the audio device list right away.
 
+> **If `brew install` hangs at "Fetching downloads" or fails with
+> `curl: (28) … Couldn't connect to existential.audio`:** that host serves the
+> `.pkg` and is intermittently down. The Homebrew cask pulls from the *same* host,
+> and GitHub releases only carry source archives (no `.pkg`), so there's no faster
+> mirror — just **retry in a while**; it usually recovers within hours. When the
+> download succeeds it will ask for your **admin password** to install the driver.
+
 > Prefer a GUI? **Loopback** (Rogue Amoeba, ~paid) does the same routing with a
 > visual patchbay and no manual Multi-Output juggling. The app steps below are
 > identical — just pick the Loopback device as the source.
@@ -94,6 +101,7 @@ refresh (the dropdown keeps your choice within a session).
 | Sound is doubled / echoey | You have both the tab-share path and the device path running, or two outputs at different latencies. Use one source; enable **Drift Correction** on BlackHole. |
 | Levels too hot / clipping | The app disables browser AGC on purpose; use the **gain** slider to trim. |
 | Chrome won't grant mic on `http://` | `localhost` is treated as secure and works. A bare LAN IP may not — use `http://localhost:8000`. |
+| `brew install` hangs / `curl (28)` to existential.audio | Their `.pkg` host is down; retry later (see the install note above). No mirror — brew and GitHub both route back to it. |
 
 ## Other platforms
 
