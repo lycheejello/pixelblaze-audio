@@ -29,6 +29,11 @@ pattern that reads those bands.
 4. **Start audio.** Hit **Start audio**, then in the browser picker choose a
    **tab or screen with "Share audio" checked** (Chrome). Play music there.
 
+   *Working offline, or using the Spotify **desktop** app?* Switch the **source**
+   dropdown from *tab / screen* to a **virtual audio device** (BlackHole/Loopback)
+   and capture that instead — the whole loop then runs with no internet. See
+   [`docs/offline-audio-macos.md`](docs/offline-audio-macos.md).
+
 The strip now reacts — bass at one end, treble at the other. Tune **gain**,
 **smoothing**, **send rate**, and the spectrum **bands** count live. The app also
 shows a **strip preview** (a JS mirror of the selected pattern) so you can audition
@@ -105,6 +110,13 @@ them in the **strip preview** (they render as two stacked rows at the real count
 
 - **Chrome** is the reliable browser for `getDisplayMedia({audio:true})`. Tab audio
   is the easiest source; whole-screen system audio works on some platforms.
+- **Two capture paths**, both mic-free. The **source** dropdown selects either a
+  *tab / screen* (the Share-audio picker) or an **audio input device**. Route
+  audio through a **virtual device** (BlackHole/Loopback) and pick it as the input
+  to run **fully offline** or capture the **Spotify desktop app** — setup in
+  [`docs/offline-audio-macos.md`](docs/offline-audio-macos.md). On macOS, tab-share
+  only captures *Chrome tab* audio, so the virtual-device path is the way to feed
+  in desktop apps.
 - The page must be **http** (or `file://`-adjacent), not **https** — Pixelblaze
   speaks plain `ws://`, and an https page blocks that as mixed content.
 - Browser ↔ Pixelblaze must be on the **same network**.
@@ -119,6 +131,8 @@ them in the **strip preview** (they render as two stacked rows at the real count
 
 ```
 index.html          # the streamer: audio capture + FFT + WebSocket + visualizer
+docs/
+  offline-audio-macos.md  # virtual-audio-device (BlackHole) setup for offline / desktop-app capture
 patterns/
   reactive.js       # spectrum pattern reading bass/mid/treble/level (+ alternates)
   spectrum.js       # N-band analyzer reading the bands[] array (N must match the app)

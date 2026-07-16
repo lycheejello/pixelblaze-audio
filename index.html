@@ -58,6 +58,14 @@
     <span class="dot" id="bdot"></span><span class="k">beat</span>
   </div>
 
+  <div class="row">
+    <span class="k">source</span>
+    <select id="asrc" title="Where to capture from. 'tab / screen' shows the Share-audio picker (needs the audio in a Chrome tab). An input device lets a virtual audio device (BlackHole/Loopback) feed the app — works fully offline. See docs/offline-audio-macos.md.">
+      <option value="display">tab / screen (Share audio)</option>
+    </select>
+    <button id="devs" title="List audio input devices. Asks for mic permission once so the device names (e.g. BlackHole) appear.">list inputs</button>
+  </div>
+
   <div id="sliders"></div>
 
   <canvas id="viz"></canvas>
@@ -98,6 +106,9 @@
     2. Enter its IP, hit <b>Connect</b>. 3. Hit <b>Start audio</b> and pick a <b>tab/screen with "Share audio" checked</b>
     (Chrome). Play music there. The strip reacts to <code>bass</code>/<code>mid</code>/<code>treble</code>/<code>level</code>
     plus the <code>bands</code> spectrum array.<br>
+    <b>Offline / Spotify desktop?</b> Set <b>source</b> to a virtual audio device
+    (BlackHole/Loopback) instead of a tab — click <b>list inputs</b>, pick it, then
+    <b>Start audio</b>. Setup: <code>docs/offline-audio-macos.md</code>.<br>
     Serve over <b>http</b> (not https) so <code>ws://</code> isn't blocked: <code>python3 -m http.server</code>.
   </div>
 </div>
@@ -174,29 +185,86 @@ function sendVars() {
 }
 const round = v => Math.round(v * 1000) / 1000;
 
-// ── Audio capture (system/tab audio via getDisplayMedia — no mic) ──────────
+// ── Audio capture — two paths, both mic-free ───────────────────────────────
+// • "display"  → getDisplayMedia: pick a tab/screen with "Share audio". Easiest,
+//   but on macOS only *tab* audio carries sound, so a streaming source needs an
+//   online Chrome tab.
+// • <deviceId> → getUserMedia on an audio *input*: lets a virtual audio device
+//   (BlackHole/Loopback) feed the app. That routes the Spotify desktop app (which
+//   plays downloads offline) straight in, so the whole loop works with no internet.
+//   Setup: docs/offline-audio-macos.md.
+let curStream = null;
 async function startAudio() {
+  const source = $('asrc').value;
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-    const aTracks = stream.getAudioTracks();
-    if (!aTracks.length) {
-      alert('No audio was shared. Re-try and tick "Share tab audio" / "Share system audio".');
-      stream.getTracks().forEach(t => t.stop());
-      return;
+    let stream;
+    if (source === 'display') {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      if (!stream.getAudioTracks().length) {
+        alert('No audio was shared. Re-try and tick "Share tab audio" / "Share system audio".');
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+      stream.getVideoTracks().forEach(t => t.stop());        // we only want the audio
+    } else {
+      // Disable browser DSP so the spectrum is the true signal, not something
+      // gained/echo-cancelled/noise-gated by the mic pipeline.
+      stream = await navigator.mediaDevices.getUserMedia({ audio: {
+        deviceId: { exact: source },
+        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+      }});
     }
-    stream.getVideoTracks().forEach(t => t.stop());          // we only want the audio
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = audioCtx.createMediaStreamSource(new MediaStream(aTracks));
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = P.smooth;
-    src.connect(analyser);                                   // not to destination = no echo
-    freq = new Uint8Array(analyser.frequencyBinCount);
-    aTracks[0].addEventListener('ended', () => { $('adot').classList.remove('on'); $('astat').textContent = 'source ended'; });
-    $('adot').classList.add('on'); $('astat').textContent = 'capturing';
+    useStream(stream);
+    if (source !== 'display') populateInputs();              // labels are unlocked now
   } catch (e) {
     $('astat').textContent = 'denied / cancelled';
   }
+}
+
+// Wire a captured stream into the FFT graph. Reuses one AudioContext across
+// restarts (browsers cap live contexts at ~6) and releases the prior source.
+function useStream(stream) {
+  if (curStream) curStream.getTracks().forEach(t => t.stop());
+  curStream = stream;
+  const aTracks = stream.getAudioTracks();
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  else if (audioCtx.state === 'suspended') audioCtx.resume();
+  const src = audioCtx.createMediaStreamSource(new MediaStream(aTracks));
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = P.smooth;
+  src.connect(analyser);                                     // not to destination = no echo
+  freq = new Uint8Array(analyser.frequencyBinCount);
+  aTracks[0].addEventListener('ended', () => { $('adot').classList.remove('on'); $('astat').textContent = 'source ended'; });
+  $('adot').classList.add('on'); $('astat').textContent = 'capturing';
+}
+
+// Fill the source dropdown with audio input devices. Labels are blank until the
+// origin has been granted mic permission once (see listInputs), so this is
+// best-effort on load and authoritative after a getUserMedia grant.
+async function populateInputs() {
+  let devs = [];
+  try { devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput'); }
+  catch (e) { return; }
+  const sel = $('asrc'), keep = sel.value;
+  while (sel.length > 1) sel.remove(1);                      // keep the "display" option
+  devs.forEach((d, i) => {
+    if (d.deviceId === 'default' || d.deviceId === 'communications') return;   // skip aliases
+    const o = document.createElement('option');
+    o.value = d.deviceId; o.textContent = d.label || `input ${i + 1}`;
+    sel.appendChild(o);
+  });
+  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+}
+
+// A one-shot getUserMedia unlocks device *labels* for enumerateDevices — the
+// "list inputs" button so a user can see and pick BlackHole by name.
+async function listInputs() {
+  try {
+    const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+    probe.getTracks().forEach(t => t.stop());
+  } catch (e) { $('astat').textContent = 'mic permission denied — device names hidden'; }
+  await populateInputs();
 }
 
 // average normalized energy in a frequency range
@@ -525,6 +593,8 @@ syncDlmPanel();
 
 $('connect').onclick = connect;
 $('audio').onclick = startAudio;
+$('devs').onclick = listInputs;
+populateInputs();                 // best-effort; names appear after "list inputs" grants permission
 requestAnimationFrame(loop);
 </script>
 </body>
