@@ -35,8 +35,10 @@ internet required.**
 brew install blackhole-2ch
 ```
 
-(or grab the installer from <https://existential.audio/blackhole/>). Log out/in if
-it doesn't appear in the audio device list right away.
+(or grab the installer from <https://existential.audio/blackhole/>). If **BlackHole
+2ch** doesn't show up in your audio devices right after install, Core Audio hasn't
+loaded the new driver yet — run `sudo killall coreaudiod` (restarts the audio
+daemon; sound blips silent for ~2 s) and it appears. A reboot also works.
 
 > **If `brew install` hangs at "Fetching downloads" or fails with
 > `curl: (28) … Couldn't connect to existential.audio`:** that host serves the
