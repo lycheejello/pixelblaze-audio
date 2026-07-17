@@ -106,6 +106,25 @@ them in the **strip preview** (they render as two stacked rows at the real count
 | `moire-ripple.js` | same outward ripple on both; differing pitch makes the wavefronts shimmer in/out of phase, hardest on drops | big builds & drops — dubstep, DnB, festival EDM |
 | `chunky-vu-spectrum.js` | dense = fine N-band spectrum; sparse = fat VU bar with peak-hold | dynamic material — rock, live sets, loud-quiet-loud |
 
+### 2D pattern (pixel map)
+
+For pixels scattered in a plane, not a line — e.g. a **star ceiling**. Needs a 2D
+**pixel map** in the Pixelblaze **Mapper** tab; the pattern then uses
+`render2D(index, x, y)`. Audition it in the **field preview** (a top-down dome
+view, not a strip).
+
+| pattern | what it does | plays best with |
+|---------|--------------|-----------------|
+| `starfield.js` | a scattered star ceiling: stars twinkle on their own over a cozy violet floor, the drone *breathes* the whole field, a beat can launch a shooting star, treble sharpens the twinkle. Chill/lounge but culty — not a VU meter. | ambient, drone, downtempo, a chant/drone loop |
+
+Select `starfield.js` in the preview to get a **field view** + a tuning panel.
+Set the **stars** slider to your pixel count, tune the look live, then **copy map**
+→ paste into the Pixelblaze Mapper (2D) so the hardware layout matches the preview,
+and **copy settings** → paste the `export var` defaults into `patterns/starfield.js`.
+Exact star positions needn't match the physically-hung pixels — a random scatter
+still reads as a believable sky. On **RGBW** pixels (SK6812) set the LED type to
+RGBW so `tint`≈0 stars route to the cool-white channel = clean cold-white.
+
 ## Notes / gotchas
 
 - **Chrome** is the reliable browser for `getDisplayMedia({audio:true})`. Tab audio
@@ -142,6 +161,7 @@ patterns/
   beat-pump.js      # whole-strip pump on `bass`, hue drifts with `treble`
   plasma.js         # flowing plasma field modulated by level/mid/treble
   sparkle.js        # treble twinkle over a bass-tinted base
+  starfield.js      # 2D star ceiling (render2D + pixel map): drone-breathing twinkle, shooting stars
   # two-strip (Output Expander, out0=300px dense + out1=150px sparse):
   depth-layers.js       # crisp spectrum/sparkle front + blurry bass wash behind
   depth-layers-mirror.js # depth-layers folded around center (bass-in-middle)

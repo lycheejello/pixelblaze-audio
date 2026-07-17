@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Cache-Control" content="no-store" />
 <title>pixelblaze-audio — music → Pixelblaze (no mic)</title>
 <style>
   :root { color-scheme: dark; }
@@ -29,6 +30,9 @@
   canvas { display:block; width:100%; height:160px; background:#0e1217;
            border:1px solid #222b36; border-radius:8px; margin-top:14px; }
   canvas#strip { height:34px; margin-top:10px; image-rendering:pixelated; }
+  canvas#field { width:300px; height:300px; max-width:100%; aspect-ratio:1/1;
+                 margin:12px auto 0; border-radius:50%; background:#06070a;
+                 border:1px solid #1c2430; display:none; }
   select { font:inherit; background:#11151b; color:#cdd6e0; border:1px solid #2a313c;
            border-radius:6px; padding:6px 9px; }
   .meters { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:12px; }
@@ -88,6 +92,7 @@
       <option value="vu-bar">vu-bar.js</option>
       <option value="plasma">plasma.js</option>
       <option value="sparkle">sparkle.js</option>
+      <option value="starfield">starfield.js (2D star ceiling — the Shrine)</option>
       <option value="depth-layers">depth-layers.js (2-strip)</option>
       <option value="depth-layers-mirror">depth-layers-mirror.js (2-strip)</option>
       <option value="crossed-spectrum">crossed-spectrum.js (2-strip)</option>
@@ -97,7 +102,9 @@
     <span class="k">— JS mirror of the device pattern (local preview only)</span>
   </div>
   <canvas id="strip"></canvas>
+  <canvas id="field" title="2D star ceiling preview — a top-down view of the dome. Each dot is a mapped pixel."></canvas>
   <div id="dlm-panel" style="display:none"></div>
+  <div id="star-panel" style="display:none"></div>
 
   <div class="note">
     1. Load <code>patterns/reactive.js</code> (scalar bands) or <code>patterns/spectrum.js</code>
@@ -118,6 +125,34 @@ const P = { gain: 1.8, smooth: 0.7, rateHz: 22, nbands: 16, beatSens: 2.0, pixel
 // depth-layers-mirror spectrum knobs (mirror of the pattern's exported vars).
 const DLM = { midShrink: 1.1, warmBias: 1.24, hueEnd: 0.01, hfTilt: 1.8, gamma: 1.6, attack: 0.1, idleBright: 0.6, sparkleRate: 0.25 };
 try { Object.assign(DLM, JSON.parse(localStorage.getItem('dlm') || '{}')); } catch (e) {}   // restore saved tuning
+
+// starfield.js knobs (mirror of the pattern's exported vars) — chill/lounge defaults.
+const STAR = { twinkle: 0.7, twSpeed: 0.7, breathe: 0.5, drift: 0.5, shoot: 0.5, violet: 0.2, tint: 0.5, bright: 0.7 };
+try { Object.assign(STAR, JSON.parse(localStorage.getItem('star') || '{}')); } catch (e) {}
+let starCount = 200;
+try { const sc = parseInt(localStorage.getItem('starCount')); if (sc) starCount = sc; } catch (e) {}
+
+// The pixel map: a scattered disc of stars (a top-down view of the dome ceiling).
+// The same coords the "copy map" button exports for the Pixelblaze Mapper, so the
+// preview and the hardware share one layout. Exact positions needn't match the
+// physically-hung stars — a random scatter still reads as a believable sky.
+let MAP2D = [];
+function genMap(n) {
+  MAP2D = [];
+  const minD = 0.85 / Math.sqrt(n), r2 = minD * minD, guard = n * 40;
+  for (let tries = 0; MAP2D.length < n && tries < guard; tries++) {
+    const a = Math.random() * 6.283, r = Math.sqrt(Math.random()) * 0.46;   // uniform in disc
+    const x = 0.5 + Math.cos(a) * r, y = 0.5 + Math.sin(a) * r;
+    let ok = true;
+    for (const [px, py] of MAP2D) { const dx = px - x, dy = py - y; if (dx * dx + dy * dy < r2) { ok = false; break; } }
+    if (ok) MAP2D.push([x, y]);
+  }
+  while (MAP2D.length < n) {                       // fill any shortfall without spacing check
+    const a = Math.random() * 6.283, r = Math.sqrt(Math.random()) * 0.46;
+    MAP2D.push([0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r]);
+  }
+}
+genMap(starCount);
 
 const $ = id => document.getElementById(id);
 let ws = null, audioCtx = null, analyser = null, freq = null;
@@ -287,10 +322,10 @@ function bandEnergyRaw(loHz, hiHz) {
 // ── main loop: analyze, draw, stream ───────────────────────────────────────
 function loop(t) {
   requestAnimationFrame(loop);
+  const dt = lastT ? t - lastT : 16; lastT = t;
   if (analyser) {
     if (analyser.smoothingTimeConstant !== P.smooth) analyser.smoothingTimeConstant = P.smooth;
     analyser.getByteFrequencyData(freq);
-    const dt = lastT ? t - lastT : 16; lastT = t;
     bands.bass   = bandEnergy(20, 250);
     bands.mid    = bandEnergy(250, 2000);
     bands.treble = bandEnergy(2000, 8000);
@@ -310,9 +345,12 @@ function loop(t) {
     beatPulse *= Math.exp(-dt / 120);
     draw();
     meters();
-    drawStrip(dt);
     if (t - lastSend >= 1000 / P.rateHz) { sendVars(); lastSend = t; }
   }
+  // The preview always animates — so idle patterns (the starfield's autonomous
+  // twinkle/drift) render even before "Start audio". With no audio the bands are
+  // 0, so audio-driven strip patterns just sit dark; the starfield still lives.
+  if (isField($('preview').value)) drawField(dt); else drawStrip(dt);
 }
 
 const viz = $('viz'), vctx = viz.getContext('2d');
@@ -395,6 +433,52 @@ const PREVIEW = {
     pixel(f, i) { const baseV = clampv(eB * eB * 0.5 + eL * 0.08, 0, 0.6), baseH = 0.95 - eB * 0.12, s = spark[i] || 0;
       return s > 0.01 ? [0.6, 1 - s, Math.max(baseV, s)] : [baseH, 1, baseV]; },
   }; })(),
+
+  // 2D star ceiling: field:true → drawField renders MAP2D positions, not a strip.
+  // Faithful mirror of patterns/starfield.js (keep the two in sync).
+  starfield: (() => {
+    let eLevel = 0, eTreble = 0, eMid = 0, eBeat = 0, clock = 0;
+    let cx = 0, cy = 0, cvx = 0, cvy = 0, clife = 0, prevBeat = 0;
+    const frac = x => x - Math.floor(x);
+    return {
+      field: true,
+      before(dt) {
+        const s = dt / 1000; clock += s;
+        eLevel  = envF(bands.level,  eLevel,  dt, 350);
+        eMid    = envF(bands.mid,    eMid,    dt, 300);
+        eTreble = envF(bands.treble, eTreble, dt, 80);
+        eBeat   = envF(beatPulse,    eBeat,   dt, 140);
+        if (beatPulse > 0.6 && prevBeat <= 0.6 && clife <= 0 && Math.random() < STAR.shoot) {
+          const a = Math.random() * 6.283, sp = 1.6 + Math.random() * 1.2;
+          cx = 0.5 + Math.cos(a) * 0.6; cy = 0.5 + Math.sin(a) * 0.6;
+          cvx = -Math.cos(a) * sp + (Math.random() - 0.5) * 0.6;
+          cvy = -Math.sin(a) * sp + (Math.random() - 0.5) * 0.6;
+          clife = 1;
+        }
+        prevBeat = beatPulse;
+        if (clife > 0) { cx += cvx * s; cy += cvy * s; clife -= s * 1.4;
+          if (cx < -0.2 || cx > 1.2 || cy < -0.2 || cy > 1.2) clife = 0; }
+      },
+      pixel2D(x, y, index) {
+        const ph = frac(index * 0.6180339887), spd = 0.3 + frac(index * 0.7548776662) * 1.1;
+        const h3 = frac(index * 0.9098300562), base = 0.1 + h3 * h3 * h3 * 0.5;
+        let tw = wave(clock * STAR.twSpeed * spd + ph); tw = tw * tw;
+        let v = base * (1 - STAR.twinkle) + base * STAR.twinkle * tw;
+        v += eTreble * 0.35 * tw;
+        v += 0.06 * wave(x * 0.6 + y * 0.4 - clock * STAR.drift * 0.05);
+        v += eMid * 0.12 * wave(clock * 0.08 + frac(Math.floor(index / 8) * 0.4));
+        v *= 1 + STAR.breathe * (1.4 * eLevel + 0.5 * eBeat);
+        if (clife > 0) { const d = Math.hypot(x - cx, y - cy);
+          let comet = clife * clampv(1 - d / 0.09); comet *= comet; if (comet > v) v = comet; }
+        v *= STAR.bright;
+        const floorV = STAR.violet * 0.12;
+        if (v < floorV) return [0.72, 0.65, floorV];
+        const hue = 0.72 + frac(index * 0.5453) * 0.36;
+        const sat = STAR.tint * (0.4 + 0.5 * frac(index * 0.311)) * clampv(1.2 - v);
+        return [hue, sat, clampv(v)];
+      },
+    };
+  })(),
 
   // Two-strip patterns: rows() returns [dense 300px, sparse 150px], drawn stacked
   // at their real counts so the density mismatch reads true (see drawStrip).
@@ -487,8 +571,8 @@ const PREVIEW = {
   }; })(),
 };
 
-// HSV (0..1) → css rgb, hue wraps — mirrors the device's hsv().
-function hsv2rgb(h, s, v) {
+// HSV (0..1) → [r,g,b] 0..255, hue wraps — mirrors the device's hsv().
+function hsv2arr(h, s, v) {
   h = (h % 1 + 1) % 1; const i = Math.floor(h * 6), f = h * 6 - i;
   const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
   let r, g, b;
@@ -497,7 +581,35 @@ function hsv2rgb(h, s, v) {
     case 2: r = p; g = v; b = t; break;  case 3: r = p; g = q; b = v; break;
     case 4: r = t; g = p; b = v; break;  default: r = v; g = p; b = q;
   }
-  return `rgb(${r * 255 | 0},${g * 255 | 0},${b * 255 | 0})`;
+  return [r * 255 | 0, g * 255 | 0, b * 255 | 0];
+}
+function hsv2rgb(h, s, v) { const [r, g, b] = hsv2arr(h, s, v); return `rgb(${r},${g},${b})`; }
+
+// ── 2D field preview: a top-down view of the star ceiling (MAP2D positions) ──
+// Each mapped pixel is drawn as a soft additive glow, so twinkles/shooting-stars
+// read like a real sky. Used for field:true patterns (starfield).
+const field = $('field'), fctx = field.getContext('2d');
+const isField = name => !!(PREVIEW[name] && PREVIEW[name].field);
+function drawField(dt) {
+  const size = field.width = field.height = field.clientWidth * devicePixelRatio;
+  const pat = PREVIEW[$('preview').value]; if (!pat || !pat.field) return;
+  pat.before(dt);
+  fctx.globalCompositeOperation = 'source-over';
+  fctx.fillStyle = '#06070a'; fctx.fillRect(0, 0, size, size);
+  fctx.globalCompositeOperation = 'lighter';               // additive star glow
+  const n = MAP2D.length;
+  for (let i = 0; i < n; i++) {
+    const [x, y] = MAP2D[i];
+    const [hh, ss, vv] = pat.pixel2D(x, y, i, n);
+    if (vv < 0.01) continue;
+    const px = x * size, py = y * size, rad = (1.3 + vv * 5) * devicePixelRatio;
+    const [r, g, b] = hsv2arr(hh, ss, vv);
+    const grd = fctx.createRadialGradient(px, py, 0, px, py, rad);
+    grd.addColorStop(0, `rgba(${r},${g},${b},1)`); grd.addColorStop(1, 'rgba(0,0,0,0)');
+    fctx.fillStyle = grd;
+    fctx.beginPath(); fctx.arc(px, py, rad, 0, 6.283); fctx.fill();
+  }
+  fctx.globalCompositeOperation = 'source-over';
 }
 
 function drawStrip(dt) {
@@ -590,6 +702,75 @@ dlmBox.appendChild(dlmCopy);
 function syncDlmPanel() { dlmBox.style.display = $('preview').value === 'depth-layers-mirror' ? '' : 'none'; }
 $('preview').addEventListener('change', syncDlmPanel);
 syncDlmPanel();
+
+// ── starfield tuning panel (shown only when starfield is the active preview) ──
+const starBox = $('star-panel');
+const STAR_SLIDERS = [
+  ['twinkle',  'twinkle', 0,   1, 0.05, 'Depth of the autonomous star twinkle. 0 = steady stars, 1 = full blink.'],
+  ['tw speed', 'twSpeed', 0.1, 2, 0.05, 'How fast stars twinkle.'],
+  ['breathe',  'breathe', 0,   1, 0.05, 'How much the drone (overall loudness) breathes the whole field up and down.'],
+  ['drift',    'drift',   0,   2, 0.05, 'Speed of the faint nebula shimmer drifting across the ceiling.'],
+  ['shoot',    'shoot',   0,   1, 0.05, 'Chance a detected beat launches a shooting star across the dome. 0 = never.'],
+  ['violet',   'violet',  0,   1, 0.05, 'Cozy violet resting glow between twinkles. 0 = stark black.'],
+  ['color',    'tint',    0,   1, 0.05, 'Loungey star color. 0 = clinical cold white, up = violet→magenta→gold tint.'],
+  ['bright',   'bright',  0.1, 1, 0.05, 'Master brightness. Stars run dim.'],
+];
+const starHdr = document.createElement('div'); starHdr.className = 'k';
+starHdr.textContent = 'starfield — live (streams to the device if connected) · hover a slider for help';
+starBox.appendChild(starHdr);
+for (const [label, k, min, max, step, help] of STAR_SLIDERS) {
+  const l = document.createElement('label'); l.className = 'sld'; l.title = help; l.style.cursor = 'help';
+  const s1 = document.createElement('span'); s1.textContent = label;
+  const inp = document.createElement('input'); inp.type = 'range'; inp.min = min; inp.max = max; inp.step = step; inp.value = STAR[k];
+  const s2 = document.createElement('span'); s2.textContent = STAR[k];
+  inp.oninput = () => {
+    STAR[k] = parseFloat(inp.value); s2.textContent = STAR[k];
+    localStorage.setItem('star', JSON.stringify(STAR));
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ setVars: { [k]: STAR[k] } }));
+  };
+  l.append(s1, inp, s2); starBox.appendChild(l);
+}
+// star count — regenerates the preview map (a hardware/layout choice, not streamed).
+{
+  const l = document.createElement('label'); l.className = 'sld';
+  l.title = 'How many stars (pixels) in the ceiling. Regenerates the map + preview. This is a layout choice — match it to the pixels you hang, then "copy map".';
+  l.style.cursor = 'help';
+  const s1 = document.createElement('span'); s1.textContent = 'stars';
+  const inp = document.createElement('input'); inp.type = 'range'; inp.min = 30; inp.max = 400; inp.step = 10; inp.value = starCount;
+  const s2 = document.createElement('span'); s2.textContent = starCount;
+  inp.oninput = () => { starCount = parseInt(inp.value); s2.textContent = starCount;
+    localStorage.setItem('starCount', starCount); genMap(starCount); };
+  l.append(s1, inp, s2); starBox.appendChild(l);
+}
+// copy the export-var defaults to paste into patterns/starfield.js.
+const starCopy = document.createElement('button'); starCopy.textContent = 'copy settings';
+starCopy.style.marginRight = '8px';
+starCopy.onclick = () => {
+  const txt = Object.entries(STAR).map(([k, v]) => `export var ${k} = ${v}`).join('\n');
+  navigator.clipboard?.writeText(txt);
+  starCopy.textContent = 'copied! (paste into the pattern)'; setTimeout(() => starCopy.textContent = 'copy settings', 1500);
+};
+starBox.appendChild(starCopy);
+// copy the pixel map to paste into the Pixelblaze Mapper (2D). Same coords the
+// preview uses, so the device layout matches what you see here.
+const mapCopy = document.createElement('button'); mapCopy.textContent = 'copy map';
+mapCopy.title = 'Copies the [[x,y],…] pixel map. In the Pixelblaze web UI → Mapper tab, paste it as the 2D map so render2D lines up with this preview.';
+mapCopy.onclick = () => {
+  const txt = JSON.stringify(MAP2D.map(([x, y]) => [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000]));
+  navigator.clipboard?.writeText(txt);
+  mapCopy.textContent = 'copied! (paste into Mapper)'; setTimeout(() => mapCopy.textContent = 'copy map', 1500);
+};
+starBox.appendChild(mapCopy);
+
+// show the right preview canvas + panel for the selected pattern.
+function syncPreviewUI() {
+  const isF = isField($('preview').value);
+  $('strip').style.display = isF ? 'none' : '';
+  $('field').style.display = isF ? 'block' : 'none';
+  starBox.style.display = $('preview').value === 'starfield' ? '' : 'none';
+}
+$('preview').addEventListener('change', syncPreviewUI);
+syncPreviewUI();
 
 $('connect').onclick = connect;
 $('audio').onclick = startAudio;

@@ -10,7 +10,21 @@ Independent project (not the Burning Man / grub-bike work, though it grew out of
 - `index.html` — the streamer app. Vanilla HTML/JS, **no build step**. `getDisplayMedia`
   for audio capture, Web Audio `AnalyserNode` for the FFT, `WebSocket` to the device.
 - `patterns/reactive.js` — Pixelblaze pattern (PBscript) reading the streamed vars.
+- `patterns/starfield.js` — 2D star-ceiling pattern (`render2D`, needs a pixel map);
+  built for the "Shrine" star tent. Chill/lounge-but-culty, not a VU meter.
 - `README.md` — run instructions + the variable contract.
+
+## Previews (keep mirrors in sync with patterns/)
+The app renders JS **mirrors** of each device pattern so you can audition without
+hardware. Three render paths in `index.html`:
+- **strip** (`drawStrip`) — single-strip patterns (`pixel(f,i,n)`).
+- **two-strip rows** — `rows()` returns `[{n,pixel},…]`, drawn stacked.
+- **field** (`drawField`) — for `field:true` patterns (starfield): draws `MAP2D`
+  positions as soft additive glows = a top-down dome view. The starfield panel has
+  a **stars** count (regenerates `MAP2D`), **copy map** (→ Pixelblaze Mapper, 2D),
+  and **copy settings** (→ the pattern's `export var` defaults), plus live knobs
+  that stream to the device (same live-tuning pattern as the depth-layers-mirror panel).
+If you edit a pattern, update its mirror here too (and vice versa).
 
 ## Conventions
 - **Vanilla, no toolchain.** Single-file HTML, served with `python3 -m http.server`.
@@ -40,8 +54,10 @@ read the scalars still work. For `bands`, the array length declared on the devic
 
 ## Pixelblaze / protocol facts
 - WebSocket is `ws://<ip>:81`. Set variables with a JSON text frame `{"setVars": {name: value}}`.
-- Patterns are PBscript (a JS subset): `beforeRender(delta)` + `render(index)` / `render3D`,
-  builtins `hsv()`, `rgb()`, `clamp()`, `time()`, `wave()`, `pixelCount`, etc.
+- Patterns are PBscript (a JS subset): `beforeRender(delta)` + `render(index)` / `render2D` /
+  `render3D`, builtins `hsv()`, `rgb()`, `clamp()`, `time()`, `wave()`, `hypot()`, `pixelCount`, etc.
+- `render2D(index, x, y)` fires when a **2D pixel map** is set (Pixelblaze Mapper tab);
+  x,y arrive normalized ~0..1. Paste a `[[x,y],…]` map (the app's "copy map" gives one).
 
 ## Gotchas learned the hard way
 - **macOS Local Network privacy** (Sequoia+) blocks non-Apple binaries from the LAN.
