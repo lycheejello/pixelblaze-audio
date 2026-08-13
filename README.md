@@ -16,15 +16,22 @@ pattern that reads those bands.
 
 ## Run it
 
+Visual walkthrough: **[`quickstart.html`](quickstart.html)** (open it from the app's
+*quick start* link, or at `http://localhost:8000/quickstart.html` once the server is up).
+
 1. **Load the pattern.** In the Pixelblaze web UI, create a new pattern, paste
    [`patterns/reactive.js`](patterns/reactive.js) (scalar bands) or
    [`patterns/spectrum.js`](patterns/spectrum.js) (the N-band array), save, and
    **make it the active pattern** (`setVars` only reaches the running pattern).
 2. **Serve the app over http** (so `ws://` isn't blocked as mixed content):
    ```
-   python3 -m http.server      # from this folder
+   ./run.sh                    # serves this folder + opens Chrome
+   ./run.sh 9000               # another port
    # → http://localhost:8000/index.html
    ```
+   Equivalent by hand: `python3 -m http.server` from this folder. `run.sh` uses
+   Apple's `/usr/bin/python3` so the LAN URL works from a phone (see the Local
+   Network note below).
 3. **Connect.** Enter the Pixelblaze IP, hit **Connect** (green dot = open).
 4. **Start audio.** Hit **Start audio**, then in the browser picker choose a
    **tab or screen with "Share audio" checked** (Chrome). Play music there.
@@ -150,6 +157,8 @@ RGBW so `tint`≈0 stars route to the cool-white channel = clean cold-white.
 
 ```
 index.html          # the streamer: audio capture + FFT + WebSocket + visualizer
+quickstart.html     # visual walkthrough (steps, sliders, contract, troubleshooting)
+run.sh              # serve this folder over http + open Chrome
 docs/
   offline-audio-macos.md  # virtual-audio-device (BlackHole) setup for offline / desktop-app capture
 patterns/
