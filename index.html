@@ -551,18 +551,30 @@ async function populateInputs() {
     o.value = d.deviceId; o.textContent = d.label || `input ${i + 1}`;
     sel.appendChild(o);
   });
-  // Pick a source: an explicit in-session choice wins, then the one saved from
-  // last time, then any virtual audio device by name — so BlackHole is selected
-  // for you rather than hunted for in the dropdown on every reload.
+  // Pick a source. **BlackHole is the default**: it's the path the rig is built
+  // around (Spotify desktop → BlackHole → here, no internet, no mic), so when
+  // one is present it wins over whatever was saved last time — a stale
+  // 'tab / screen' from one afternoon of tab capture shouldn't quietly become
+  // the default forever. Above it, only two things: ?src= for a pinned install,
+  // and a pick made by hand in this session.
   const saved = (() => { try { return localStorage.getItem('pbsrc'); } catch (e) { return null; } })();
   const has = v => v && [...sel.options].some(o => o.value === v);
   const wanted = Q.get('src');   // pinned by URL — wins over saved and auto-detected
-  const pinned = wanted && [...sel.options].find(o => o.textContent.toLowerCase().includes(wanted.toLowerCase()));
-  const virtual = [...sel.options].find(o => /blackhole|loopback|soundflower|virtual|aggregate/i.test(o.textContent));
+  const opts = [...sel.options];
+  const pinned = wanted && opts.find(o => o.textContent.toLowerCase().includes(wanted.toLowerCase()));
+  // BlackHole itself first, then anything merely *named* after it, then the
+  // other loopback-ish names. One flat regex picks whatever enumerateDevices
+  // lists first, and a rig set up for this has aggregates called things like
+  // "speakers + BlackHole" sitting alongside the real "BlackHole 2ch" — the
+  // aggregate may carry no input channels at all, so match the device, not the
+  // mention of it.
+  const virtual = opts.find(o => /^blackhole/i.test(o.textContent.trim()))
+               || opts.find(o => /blackhole/i.test(o.textContent))
+               || opts.find(o => /loopback|soundflower|virtual|aggregate/i.test(o.textContent));
   if (pinned)                 sel.value = pinned.value;
   else if (srcTouched && has(keep)) sel.value = keep;
-  else if (has(saved))        sel.value = saved;
   else if (virtual)           sel.value = virtual.value;
+  else if (has(saved))        sel.value = saved;
   else if (has(keep))         sel.value = keep;
 }
 

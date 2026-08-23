@@ -64,8 +64,12 @@ Visual walkthrough: **[`quickstart.html`](quickstart.html)** (open it from the a
    - **Start audio.** Hit **Start audio**, then in the browser picker choose a
      **tab or screen with "Share audio" checked** (Chrome). Play music there.
 
-   The **source** dropdown is remembered too, and a virtual device (BlackHole,
-   Loopback) is auto-selected by name when there's no saved choice.
+   The **source** dropdown defaults to **BlackHole** whenever one is present —
+   that's the path this rig is built around, so it wins over the choice saved
+   from last time (other loopback devices are the fallback, then the saved one).
+   Only `?src=` and a pick you make by hand in the session outrank it. Names are
+   hidden until the origin has mic permission once, which is why **Start show**
+   asks for it before choosing.
 
    *Working offline, or using the Spotify **desktop** app?* Switch the **source**
    dropdown from *tab / screen* to a **virtual audio device** (BlackHole/Loopback)
