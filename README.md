@@ -27,14 +27,39 @@ Visual walkthrough: **[`quickstart.html`](quickstart.html)** (open it from the a
    ```
    ./run.sh                    # serves this folder + opens Chrome
    ./run.sh 9000               # another port
-   # → http://localhost:8000/index.html
+   # → http://localhost:8000/index.html?auto=1
    ```
+   Join the Pixelblaze's wifi network yourself first (menu bar) — a web page has
+   no API for it.
+
    Equivalent by hand: `python3 -m http.server` from this folder. `run.sh` uses
    Apple's `/usr/bin/python3` so the LAN URL works from a phone (see the Local
    Network note below).
-3. **Connect.** Enter the Pixelblaze IP, hit **Connect** (green dot = open).
-4. **Start audio.** Hit **Start audio**, then in the browser picker choose a
-   **tab or screen with "Share audio" checked** (Chrome). Play music there.
+3. **Hit ▶ Start show.** One button: connects to the Pixelblaze, selects the
+   virtual audio device, and starts capturing. `run.sh` opens the page with
+   `?auto=1` so it tries this by itself — Chrome may still want one click first,
+   since a page can't start an AudioContext without a user gesture.
+
+   The manual equivalents are all still there:
+
+   - **Connect.** The page runs **find** on load, so usually the IP is already
+     filled in and the dot is green by the time you look. Otherwise hit **find**,
+     or type the address and hit **Connect**. `find` tries the AP-mode address
+     `192.168.4.1`, the last address that worked and whatever is in the box, all
+     at once — usually instant. Failing that it sweeps **this machine's own
+     `/24` over `:80`** for hosts that are alive at all, then asks just those few
+     which speaks `ws://…:81`. (It does *not* sweep the `/24` over `ws://`:
+     Chrome throttles WebSocket handshakes, so a 254-host ws sweep reports
+     everything dead — including a Pixelblaze that is sitting right there.)
+     `run.sh` passes the subnet in as `?lan=`, because a page served from
+     `localhost` can't otherwise tell which network it's on. The `log` link next
+     to the status dot shows exactly what it tried. The last good address is
+     remembered across reloads.
+   - **Start audio.** Hit **Start audio**, then in the browser picker choose a
+     **tab or screen with "Share audio" checked** (Chrome). Play music there.
+
+   The **source** dropdown is remembered too, and a virtual device (BlackHole,
+   Loopback) is auto-selected by name when there's no saved choice.
 
    *Working offline, or using the Spotify **desktop** app?* Switch the **source**
    dropdown from *tab / screen* to a **virtual audio device** (BlackHole/Loopback)
@@ -145,7 +170,11 @@ RGBW so `tint`≈0 stars route to the cool-white channel = clean cold-white.
   in desktop apps.
 - The page must be **http** (or `file://`-adjacent), not **https** — Pixelblaze
   speaks plain `ws://`, and an https page blocks that as mixed content.
-- Browser ↔ Pixelblaze must be on the **same network**.
+- Browser ↔ Pixelblaze must be on the **same network** — but it needn't be *yours*
+  and needs no internet. In **AP mode** the Pixelblaze *is* the network (hold the
+  onboard button ~3.5 s; it's then always at `192.168.4.1`), so the whole rig runs
+  with no router at all — see [`docs/offline-network.md`](docs/offline-network.md).
+  The Pixelblaze's USB port is **power only**, so wifi is the only control path.
 - The browser has **local-network access**; a Python streamer on macOS may not
   (Local Network privacy blocks non-Apple binaries — run under Apple's
   `/usr/bin/python3` if you go that route). The browser sidesteps this entirely.
@@ -161,6 +190,7 @@ quickstart.html     # visual walkthrough (steps, sliders, contract, troubleshoot
 run.sh              # serve this folder over http + open Chrome
 docs/
   offline-audio-macos.md  # virtual-audio-device (BlackHole) setup for offline / desktop-app capture
+  offline-network.md      # running with no router/internet: Pixelblaze AP mode (192.168.4.1)
 patterns/
   reactive.js       # spectrum pattern reading bass/mid/treble/level (+ alternates)
   spectrum.js       # N-band analyzer reading the bands[] array (N must match the app)

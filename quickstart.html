@@ -120,10 +120,23 @@
 
   <h2>Before you start</h2>
   <table>
-    <tr><td>Pixelblaze</td><td>powered on, on the <b>same wifi</b> as this computer, and you know its IP (the Pixelblaze web UI shows it)</td></tr>
+    <tr><td>Pixelblaze</td><td>powered on, on the <b>same wifi</b> as this computer, and you know its IP (the Pixelblaze web UI shows it) — or running <a href="#nonetwork">its own network</a>, where it's always <code>192.168.4.1</code></td></tr>
     <tr><td>Chrome</td><td>the reliable browser for tab-audio capture</td></tr>
     <tr><td>music</td><td>playing in a Chrome tab — or through a virtual audio device for desktop apps / offline</td></tr>
   </table>
+
+  <h2>The short version</h2>
+  <p class="k">Once it's set up, launching a show is: join the Pixelblaze's wifi from the menu bar, run
+     <code>./run.sh</code>, and click one button. <b>▶ Start show</b> connects to the Pixelblaze, selects your
+     virtual audio device, and starts capturing.</p>
+  <div class="mock">
+    <div class="mrow">
+      <span class="mbtn go">▶ Start show</span>
+      <span class="k">running — BlackHole 2ch</span>
+    </div>
+  </div>
+  <p class="k">It remembers the last Pixelblaze address and the last audio source, so there's nothing to retype.
+     The steps below are what that button is doing, and what to reach for when something needs adjusting.</p>
 
   <h2>The four steps</h2>
 
@@ -160,15 +173,24 @@ ctrl-c to stop</span></div>
     <div class="num">3</div>
     <div class="body">
       <div class="h">Connect to the Pixelblaze.</div>
-      <p>Type its IP, hit <b>Connect</b>. Green dot = the socket is open.</p>
+      <p>The page looks for it on load, so this is usually done before you get here —
+         green dot = the socket is open. If not, hit <b>find</b>, or type the address
+         and hit <b>Connect</b>.</p>
       <div class="mock">
         <div class="mrow">
           <span class="k">Pixelblaze</span>
           <span class="mip">192.168.0.65</span>
           <span class="mbtn">Connect</span>
+          <span class="mbtn">find</span>
           <span class="dot"></span><span class="k">connected</span>
         </div>
       </div>
+      <p class="k"><b>find</b> tries the AP-mode address (<code>192.168.4.1</code>), the last one that worked
+         and whatever is in the box, all at once — usually instant. Failing that it sweeps the subnet
+         <i>this machine</i> is on over port 80 to see who's alive, then asks those few who speaks
+         WebSocket on port 81. <code>run.sh</code> tells the page which subnet to sweep. If it comes up
+         empty, the <b>log</b> link next to the dot shows every address it tried and how long each took.
+         The app remembers the last address that connected, so after the first time it's already filled in.</p>
     </div>
   </div>
 
@@ -192,10 +214,130 @@ ctrl-c to stop</span></div>
       </div>
       <div class="tip"><b>macOS:</b> only <b>Chrome tab</b> audio can be captured this way — window and
         whole-screen shares arrive silent. For Spotify desktop, any other app, or a fully offline
-        setup, use the <b>source</b> dropdown → <b>audio input device</b> and route sound through a
-        virtual device (BlackHole / Loopback). See <code>docs/offline-audio-macos.md</code>.</div>
+        setup, skip the picker entirely and use <a href="#blackhole">BlackHole</a> instead.</div>
     </div>
   </div>
+
+  <h2 id="blackhole">Spotify desktop &amp; offline — BlackHole</h2>
+  <p class="k">The steps above capture a <b>Chrome tab</b>. For the <b>Spotify desktop app</b>, any other
+     program, or a rig with no internet, route the sound through a virtual audio device and capture
+     <i>that</i> — the app just treats it as an ordinary audio input. Two one-time setup steps, then it's
+     <b>pick the source, hit Start audio</b>.</p>
+
+  <div class="flow">
+    <div class="fbox"><div class="t">Spotify app</div><div class="d">offline downloads, no internet needed</div></div>
+    <div class="arrow">→</div>
+    <div class="fbox"><div class="t">Multi-Output</div><div class="d">copies system audio to your speakers <b>and</b> BlackHole</div></div>
+    <div class="arrow">→</div>
+    <div class="fbox"><div class="t">BlackHole 2ch</div><div class="d">virtual device — carries the sound, makes no noise</div></div>
+    <div class="arrow">→</div>
+    <div class="fbox"><div class="t">this browser</div><div class="d">source = BlackHole, then on to the Pixelblaze</div></div>
+  </div>
+
+  <div class="step" style="margin-top:22px">
+    <div class="num">1</div>
+    <div class="body">
+      <div class="h">Install BlackHole — <b>once</b>.</div>
+      <div class="term">$ brew install --cask blackhole-2ch   <span class="c"># asks for your admin password</span>
+$ sudo killall coreaudiod              <span class="c"># load the driver without rebooting</span></div>
+      <p class="k">Sound blips silent for ~2 s (Bluetooth speakers may drop and re-pair). Without that second
+        command the driver sits on disk but never shows up in your device list — a reboot works too.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <div class="h">Make a Multi-Output Device — <b>once</b>.</div>
+      <p>Open <b>Audio MIDI Setup</b> → <b>⌘1</b> (Show Audio Devices) → the <b>+</b> at the bottom-left →
+         <b>Create Multi-Output Device</b>. In the right pane: tick <b>Use</b> on both your speakers and
+         <b>BlackHole 2ch</b>, set <b>Master Device</b> to your speakers, tick <b>Drift Correction</b> on the
+         <b>BlackHole</b> row only, and set the <b>Sample Rate</b> to your speakers' native rate.</p>
+      <p>Then <b>System Preferences → Sound → Output → Multi-Output Device</b>.</p>
+      <div class="tip"><b>Why both outputs:</b> sending audio to BlackHole alone means <i>you</i> hear nothing —
+        it's a pipe, not a speaker. The Multi-Output copies the same audio to your speakers. Fair warning:
+        Multi-Output Devices ignore the keyboard volume keys, so set volume in Spotify itself.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <div class="h">Every time after that: <b>source</b> → BlackHole → <b>Start audio</b>.</div>
+      <p>No share picker, no tab. Click <b>list inputs</b> once and approve the permission prompt — that's
+         only so Chrome will reveal device <i>names</i>; the app never opens your real mic.</p>
+      <div class="mock">
+        <div class="mrow">
+          <span class="k">source</span>
+          <span class="mip">BlackHole 2ch ▾</span>
+          <span class="mbtn">list inputs</span>
+          <span class="mbtn go">Start audio</span>
+          <span class="dot"></span><span class="k">capturing</span>
+        </div>
+      </div>
+      <p class="k">Hit play in Spotify and the meters should move. Connect to the Pixelblaze exactly as in
+        step 3 above — nothing about the device link changes.</p>
+      <div class="tip"><b>Re-pick after a reload.</b> The app doesn't remember the source across refreshes.</div>
+    </div>
+  </div>
+
+  <p class="k">Windows: <a href="https://vb-audio.com/Cable/">VB-Audio Virtual Cable</a>, pick <i>CABLE Output</i>
+     as the source. Linux: PulseAudio/PipeWire already expose a <i>Monitor of &lt;your output&gt;</i> — no install.
+     Full notes and troubleshooting in <a href="docs/offline-audio-macos.md">docs/offline-audio-macos.md</a>.</p>
+
+  <h2 id="nonetwork">No router, no internet — AP mode</h2>
+  <p class="k">The app and the Pixelblaze must share a network — but it doesn't have to be <i>yours</i>, and it
+     needs no internet. The Pixelblaze can <b>be</b> the network. Combine this with BlackHole above and the whole
+     rig is self-contained: nothing upstream can take the show down.</p>
+
+  <div class="step" style="margin-top:22px">
+    <div class="num">1</div>
+    <div class="body">
+      <div class="h">Put the Pixelblaze in <b>AP mode</b>.</div>
+      <p>Power it, then <b>hold the onboard button ~3.5 seconds</b>. It starts broadcasting a network called
+         <code>Pixelblaze_XXXXXX</code>. Join that, and its config page opens — or go to
+         <code>http://192.168.4.1</code>. Set it to stay in <b>AP mode</b> and give it a password.</p>
+      <div class="tip"><b>The password must be ≥ 8 characters.</b> Shorter ones are silently rejected — the
+        setting looks saved and the network never comes back protected. It's the usual way to lock yourself out.
+        (Pre-V3 boards have no button: bridge pin 6 / <b>GP0</b> to <b>GND</b> for ~5 s instead.)</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <div class="h">The address is fixed: <code>192.168.4.1</code>.</div>
+      <p>No DHCP, no discovery, no hunting for what IP it got today — in AP mode it's always that.</p>
+      <div class="mock">
+        <div class="mrow">
+          <span class="k">Pixelblaze</span>
+          <span class="mip">192.168.4.1</span>
+          <span class="mbtn">Connect</span>
+          <span class="dot"></span><span class="k">connected</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <div class="h">Everything else already runs offline.</div>
+      <p><code>./run.sh</code> serves on <b>loopback</b> — <code>localhost</code> doesn't touch any interface that
+         could be down. BlackHole is a local virtual device. The music is Spotify's offline downloads. So: join the
+         Pixelblaze's network, start the app, source = BlackHole, connect to <code>192.168.4.1</code>.</p>
+      <div class="tip"><b>Two things that will bite you.</b> macOS keeps wandering back to a network that has
+        internet — join the Pixelblaze net manually and ignore the "no internet connection" warning, it's correct.
+        And a <b>Tailscale exit node</b> tunnels all traffic and kills the local route; with no WAN at all that
+        failure is guaranteed, not intermittent. Set <b>Exit Node → None</b>.</div>
+    </div>
+  </div>
+
+  <p class="k">Need a phone on it too, or more than one controller? ESP32 AP mode only handles a handful of
+     clients — instead plug in any wifi router and <b>leave its WAN port empty</b>. Normal LAN, no internet, nothing
+     upstream to fail. Full notes in <a href="docs/offline-network.md">docs/offline-network.md</a>.</p>
+  <p class="k"><b>Not an option:</b> USB. The Pixelblaze's USB connector is power only — the data lines aren't
+     wired to anything, so there's no serial control path. WiFi is the only way in, which is the whole point of AP mode.</p>
 
   <h2>What the sliders do</h2>
   <table>
@@ -253,11 +395,16 @@ ctrl-c to stop</span></div>
   <table>
     <tr><th>symptom</th><th>fix</th></tr>
     <tr><td>won't connect</td><td>Same wifi? Right IP? On this machine, a <b>Tailscale exit node</b> tunnels
-      LAN traffic and kills the route — set <b>Exit Node → None</b> (disconnecting Tailscale isn't the fix).</td></tr>
+      LAN traffic and kills the route — set <b>Exit Node → None</b> (disconnecting Tailscale isn't the fix).
+      No router around? Run the Pixelblaze in <a href="#nonetwork">AP mode</a>.</td></tr>
     <tr><td>connected, nothing moves</td><td>The reactive pattern isn't the <b>active</b> one on the device.
       <code>setVars</code> only reaches what's running.</td></tr>
     <tr><td>meters flat</td><td>No audio in the captured track — re-share and tick <b>Share audio</b>; on macOS
       share a <b>Chrome tab</b>, not a window or screen.</td></tr>
+    <tr><td>meters flat on BlackHole</td><td>System output isn't set to the <b>Multi-Output Device</b>, so nothing
+      is reaching BlackHole. Check <b>Sound → Output</b>, and that you picked <b>BlackHole 2ch</b> as the source.</td></tr>
+    <tr><td>music plays, you hear nothing</td><td>Output is set to <b>BlackHole</b> alone. Use the
+      <b>Multi-Output Device</b> so it hits your speakers too.</td></tr>
     <tr><td>connection refused / blocked</td><td>The page is on <b>https</b>. Serve it over <code>http</code>
       (that's what <code>./run.sh</code> does).</td></tr>
     <tr><td>only part of the strip lights</td><td>The app's <b>bands</b> count ≠ <code>NBANDS</code> in
@@ -268,6 +415,7 @@ ctrl-c to stop</span></div>
   <div class="foot">
     <a href="index.html">→ open the app</a> &nbsp;·&nbsp; <a href="README.md">README</a>
     &nbsp;·&nbsp; <a href="docs/offline-audio-macos.md">offline / desktop-app audio setup</a>
+    &nbsp;·&nbsp; <a href="docs/offline-network.md">no-router / AP-mode setup</a>
   </div>
 </div>
 

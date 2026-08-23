@@ -21,9 +21,11 @@ Spotify desktop app (offline downloads)
              Device, so you still hear it)     Pixelblaze
 ```
 
-Nothing here touches the LAN link to the Pixelblaze, so with a router that has no
-WAN you still get the full loop: **Mac + Pixelblaze on the same Wi-Fi/LAN, no
-internet required.**
+Nothing here touches the LAN link to the Pixelblaze, so you still get the full
+loop with **no internet**: Mac + Pixelblaze on the same Wi-Fi/LAN. And that LAN
+can be nothing at all — run the Pixelblaze in **AP mode** and it *becomes* the
+network (always `192.168.4.1`, no router required). See
+[`offline-network.md`](offline-network.md).
 
 ---
 

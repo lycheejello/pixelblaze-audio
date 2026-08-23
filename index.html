@@ -42,6 +42,12 @@
   .meter .fill { height:100%; width:0%; border-radius:4px; }
   .note { color:#6b7480; font-size:11px; margin-top:18px; border-top:1px solid #1c2430; padding-top:12px; }
   code { color:#8fd6a0; }
+  a.lnk { color:#6fb8e8; text-decoration:none; border-bottom:1px dotted #3a5468; cursor:pointer; }
+  pre#flog { display:none; white-space:pre-wrap; margin:6px 0 0; padding:9px 11px; max-height:260px;
+             overflow:auto; background:#0e1217; border:1px solid #222b36; border-radius:8px;
+             color:#7d8794; font:11px/1.55 ui-monospace,Menlo,monospace; }
+  pre#flog b { color:#cdd6e0; font-weight:normal; }
+  pre#flog i { color:#e8a05d; font-style:normal; }
 </style>
 </head>
 <body>
@@ -51,11 +57,19 @@
     &nbsp;<a href="quickstart.html" style="color:#6fb8e8">quick start ↗</a></div>
 
   <div class="row">
+    <button id="show" class="go" title="One click: connect to the Pixelblaze, select the virtual audio device, and start capturing.">▶ Start show</button>
+    <span class="k" id="showstat">connect · pick source · start audio</span>
+  </div>
+
+  <div class="row">
     <span class="k">Pixelblaze</span>
     <input type="text" id="ip" value="192.168.0.65" placeholder="192.168.x.x" />
     <button id="connect">Connect</button>
+    <button id="find" title="Find the Pixelblaze automatically: tries the AP-mode address (192.168.4.1), the last one that worked and the address in the box, then sweeps this machine&#39;s own /24 for anything answering ws:// on port 81. Runs on page load too.">find</button>
     <span class="dot" id="wsdot"></span><span class="k" id="wsstat">disconnected</span>
+    <a class="lnk" id="flogtoggle">log</a>
   </div>
+  <pre id="flog"></pre>
 
   <div class="row">
     <button id="audio" class="go">Start audio</button>
@@ -156,11 +170,18 @@ function genMap(n) {
 genMap(starCount);
 
 const $ = id => document.getElementById(id);
+
+// URL params, so a fixed install can pin its settings instead of depending on
+// whatever this browser profile happens to remember:
+//   ?ip=192.168.4.1&src=BlackHole&auto=1
+// `src` matches the device *label*, not the id — deviceIds are randomised per
+// browser profile, so an id from anywhere else means nothing here.
+const Q = new URLSearchParams(location.search);
 let ws = null, audioCtx = null, analyser = null, freq = null;
 let bands = { bass:0, mid:0, treble:0, level:0 };
 let spectrum = [];          // N log-spaced 0..1 bands, recomputed each frame
 let specPeak = [];          // per-band rolling peak, for auto-gain (AGC)
-let lastSend = 0, lastT = 0;
+let lastSend = 0, lastT = 0, lastA = 0;   // lastT = draw loop, lastA = analysis tick
 
 // ── beat detection (bass-flux over a rolling window) ───────────────────────
 // Keep ~1 s of recent bass energy; a frame whose bass jumps past
@@ -194,16 +215,240 @@ function rebuildBandEdges() {
 rebuildBandEdges();
 
 // ── WebSocket to the Pixelblaze (ws://ip:81) ───────────────────────────────
+const PB_PORT = 81;
 function connect() {
   const ip = $('ip').value.trim();
   if (ws) { try { ws.close(); } catch {} ws = null; }
   setWs(false, 'connecting…');
-  ws = new WebSocket(`ws://${ip}:81`);
-  ws.onopen  = () => setWs(true, 'connected');
-  ws.onclose = () => setWs(false, 'disconnected');
-  ws.onerror = () => setWs(false, 'error (check IP / http page / same wifi)');
+  // resolves true once open, false on failure/timeout — so "Start show" can wait
+  // on it before moving to the audio step. Extra resolve() calls are no-ops.
+  return new Promise(res => {
+    ws = new WebSocket(`ws://${ip}:${PB_PORT}`);
+    ws.onopen  = () => { setWs(true, 'connected');
+                         try { localStorage.setItem('pbip', ip); } catch (e) {}    // prefill next time
+                         res(true); };
+    ws.onclose = () => { setWs(false, 'disconnected'); res(false); };
+    ws.onerror = () => { setWs(false, 'error (check IP / http page / same wifi)'); res(false); };
+    setTimeout(() => res(false), 4000);
+  });
 }
 function setWs(on, txt) { $('wsdot').classList.toggle('on', on); $('wsstat').textContent = txt; }
+
+// ── finding the Pixelblaze ─────────────────────────────────────────────────
+// No mDNS or discovery from a browser, so this brute-forces it: open a ws:// to
+// each candidate and see which one answers on :81. Cheap, because the useful
+// guesses come first — AP mode is *always* 192.168.4.1, and the last address
+// that worked is usually still right.
+//
+// Two things make this fail in ways that look identical from the outside — a
+// flat "nothing found" for a device that is sitting right there answering:
+//
+//  • Sweeping the wrong /24. 254 SYNs to a subnet this machine isn't on go
+//    unanswered for the OS's whole retry window, which is 20 s of nothing.
+//    Hence: find the local subnet first (run.sh passes it as ?lan=).
+//  • Chrome throttles WebSocket handshakes. With a couple of hundred probes
+//    in flight it staggers them, and a probe's timeout burns down while it is
+//    still queued rather than on the wire. Measured here: a /24 ws:// sweep
+//    reported all 253 hosts dead, then the *same* Pixelblaze took 4704 ms to
+//    complete a handshake that curl completes instantly. So a ws:// sweep of a
+//    whole /24 does not work in a browser at any timeout worth waiting for.
+//
+// Which is why discovery is HTTP-first: `fetch` is not throttled that way, so
+// one no-cors pass over :80 gets a short list of hosts that are actually alive
+// (six here, out of 254), and only those few get a patient ws:// probe. Fast,
+// and it finds the device the ws:// sweep walked straight past.
+//
+// So every probe is timed, and the log below says which of those it was rather
+// than shrugging. The log is the point — read it when this doesn't work.
+
+// ── find log ───────────────────────────────────────────────────────────────
+const flog = [];
+let flogT0 = 0;
+function dlog(line, cls) {
+  const t = flogT0 ? ((performance.now() - flogT0) / 1000).toFixed(1).padStart(5) : '  0.0';
+  flog.push(`${t}s  ${cls ? `<${cls}>${line}</${cls}>` : line}`);
+  const el = $('flog');
+  if (el) { el.innerHTML = flog.join('\n'); el.scrollTop = el.scrollHeight; }
+}
+
+// ── probes ─────────────────────────────────────────────────────────────────
+// Both resolve {ok, ms}: `ms` is what tells a refusal apart from a dead host.
+function probeWs(ip, ms = 1200) {
+  const t0 = performance.now();
+  return new Promise(res => {
+    let s, done = false;
+    const finish = ok => {
+      if (done) return; done = true;
+      try { s.close(); } catch (e) {}
+      res({ ip, ok, ms: performance.now() - t0 });
+    };
+    try { s = new WebSocket(`ws://${ip}:${PB_PORT}`); } catch (e) { return finish(false); }
+    s.onopen = () => finish(true);
+    s.onerror = s.onclose = () => finish(false);   // closed port fails fast; dead host waits out ms
+    setTimeout(() => finish(false), ms);
+  });
+}
+
+// The Pixelblaze's web UI is on :80. We can't *read* a cross-origin response,
+// but an opaque no-cors fetch still resolves if anything answered at all — so
+// this says "something is alive at this address" even when the ws:// probe on
+// :81 comes up empty, which is exactly the case that had us hunting by hand.
+async function probeHttp(ip, ms = 1200) {
+  const t0 = performance.now(), ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    await fetch(`http://${ip}/`, { mode: 'no-cors', signal: ac.signal, cache: 'no-store' });
+    return { ip, ok: true, ms: performance.now() - t0 };
+  } catch (e) {
+    return { ip, ok: false, ms: performance.now() - t0, err: e && e.name };
+  } finally { clearTimeout(timer); }
+}
+
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const isLanIP = ip => {                               // RFC1918 only — no 127.*, no 0.0.0.0
+  const m = IPV4.exec(ip || ''); if (!m) return false;
+  const a = +m[1], b = +m[2];
+  return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+};
+const sub24 = ip => ip.replace(/\d+$/, '');
+
+// This machine's own LAN address, best-effort, most trustworthy first:
+//   1. ?lan= — run.sh knows it for certain and puts it in the URL.
+//   2. the page's own host, when it's served over the LAN and not localhost.
+//   3. a WebRTC host candidate. Chrome normally hides these behind an mDNS
+//      `<uuid>.local` name, but hands the real address to an origin that holds
+//      mic permission — which this one asks for anyway, so after the first run
+//      it usually works even when the page was opened at localhost.
+async function localAddrs() {
+  const out = [];
+  const add = (ip, how) => {
+    if (!isLanIP(ip) || out.includes(ip)) return;
+    out.push(ip); dlog(`this machine is at <b>${ip}</b> (${how})`);
+  };
+  add(Q.get('lan'), '?lan=, from run.sh');
+  add(location.hostname, 'page is served from it');
+  try {
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    pc.createDataChannel('probe');
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise(done => {
+      const t = setTimeout(done, 800);
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === 'complete') { clearTimeout(t); done(); }
+      };
+    });
+    for (const ip of (pc.localDescription.sdp.match(/\d+\.\d+\.\d+\.\d+/g) || [])) add(ip, 'WebRTC candidate');
+    pc.close();
+  } catch (e) {}
+  if (!out.length) dlog('could not work out this machine\'s LAN address ' +
+                        '(no ?lan=, served from localhost, WebRTC gave mDNS names) — guessing', 'i');
+  return out;
+}
+
+// Probes in flight, refilled as each finishes. Returns every hit plus the timing
+// histogram the diagnosis is built from: a host that refuses in 2 ms and one
+// that never answers at all are the same "no" here but mean opposite things.
+async function sweep(prefix, probeOne, say, skip, CONC = 32) {
+  const ips = [];
+  for (let i = 1; i <= 254; i++) { const ip = prefix + i; if (ip !== skip) ips.push(ip); }
+  let next = 0, done = 0;
+  const hits = [], stats = { instant: 0, timeout: 0, n: 0 };
+  await Promise.all(Array.from({ length: CONC }, async () => {
+    while (next < ips.length) {
+      const r = await probeOne(ips[next++]);
+      done++; stats.n++;
+      if (r.ok) hits.push(r.ip);
+      else if (r.ms < 60) stats.instant++;
+      else if (r.ms > 900) stats.timeout++;
+      say(`scanning ${prefix}0/24 … ${Math.round(done / ips.length * 100)}%`);
+    }
+  }));
+  return { hits, stats };
+}
+
+// A LAN sweep where essentially nothing even waited for a reply isn't a network
+// result, it's a refusal — Chrome dropped the requests before they left. Say so,
+// because "nothing found on :81" sends you looking at the wrong thing entirely.
+function blocked(stats) { return stats.n > 20 && stats.instant / stats.n > 0.95; }
+function sayBlocked() {
+  dlog('every probe failed in &lt;60 ms — nothing reached the network. That is Chrome\'s ' +
+       'local-network gate, not a missing device.', 'i');
+  dlog('  → click <b>find</b> (a real click lets Chrome show the permission prompt), and allow ' +
+       'local network access. If no prompt appears, check the toggle in the address bar or ' +
+       'chrome://settings/content/localNetworkAccess');
+}
+
+let finding = null;                       // one sweep at a time — the on-load
+function findPixelblaze() {               // autolocate and "Start show" share it
+  return finding || (finding = locate().finally(() => { finding = null; }));
+}
+
+async function locate() {
+  const btn = $('find'), say = t => $('wsstat').textContent = t;
+  btn.disabled = true;
+  flog.length = 0; flogT0 = performance.now();
+  dlog(`looking for a Pixelblaze — page at <b>${location.host || 'file://'}</b>`);
+  try {
+    // 1. The sure bets: whatever is in the box, the last one that worked, and
+    //    AP mode's fixed address. In parallel and patient — three handshakes
+    //    don't trip Chrome's throttle, and the device can take seconds to
+    //    answer one even when it is sitting right there.
+    say('looking…');
+    const sure = [...new Set([$('ip').value.trim(), localStorage.getItem('pbip'), '192.168.4.1'].filter(Boolean))];
+    const tried = await Promise.all(sure.map(ip => probeWs(ip, 4000)));
+    for (const r of tried) dlog(`  ws://${r.ip}:81 → ${r.ok ? '<b>open</b>' : 'no'} (${Math.round(r.ms)} ms)`);
+    const known = tried.find(r => r.ok);
+    if (known) { $('ip').value = known.ip; dlog(`connecting to <b>${known.ip}</b>`); return connect(); }
+    if (tried.every(r => r.ms < 60)) sayBlocked();
+
+    // 2. Nothing known answered, so sweep — over :80, never ws:// (see above).
+    //    The /24 this machine is on first, then the usual home-router ranges.
+    const mine = await localAddrs();
+    const subs = mine.map(sub24).filter((s, i, a) => a.indexOf(s) === i);
+    const guesses = ['192.168.1.', '192.168.0.', '10.0.0.', '10.0.1.'].filter(s => !subs.includes(s));
+
+    for (const s of [...subs, ...guesses]) {
+      const own = mine.find(ip => sub24(ip) === s);
+      dlog(`sweeping <b>${s}0/24</b> on :80${own ? '' : ' (guess)'}`);
+      say(`scanning ${s}0/24 …`);
+      const alive = await sweep(s, ip => probeHttp(ip), say, own);
+      if (blocked(alive.stats)) { sayBlocked(); break; }
+      if (!alive.hits.length) {
+        dlog(`  nobody answered on :80 (${alive.stats.timeout} timed out)`);
+        continue;
+      }
+
+      // Every one of those is some box with a web server — a router, a printer,
+      // a NAS. Ask them all at once which speaks WebSocket on :81; a handful of
+      // handshakes is under the throttle, and the Pixelblaze is whoever opens.
+      dlog(`  alive on :80 → <b>${alive.hits.join(', ')}</b> — asking which speaks ws:// on :81`);
+      say(`checking ${alive.hits.length} hosts …`);
+      const opens = await Promise.all(alive.hits.map(ip => probeWs(ip, 6000)));
+      for (const r of opens) dlog(`  ws://${r.ip}:81 → ${r.ok ? '<b>open</b>' : 'no'} (${Math.round(r.ms)} ms)`);
+      const hit = opens.find(r => r.ok);
+      if (hit) { $('ip').value = hit.ip; dlog(`connecting to <b>${hit.ip}</b>`); return connect(); }
+      dlog('  hosts are alive there but none speaks WebSocket on :81 — open one in a tab ' +
+           'and check whether it is the Pixelblaze', 'i');
+    }
+    say('nothing found — open the log next to the dot');
+    dlog('gave up. If a Pixelblaze is on this network, open its web UI in a tab to get the ' +
+         'address, paste it in the box and hit Connect — and tell me what this log said.', 'i');
+    $('flog').style.display = 'block';
+    return false;
+  } finally { btn.disabled = false; beacon(); }
+}
+
+// The page is served by `python3 -m http.server`, which prints every request it
+// gets. So: hand the find log back to it as a URL it will 404 on, and the log
+// lands in the terminal next to the server instead of only in the browser.
+// Same-origin, local-only, and it costs one dead request per find.
+function beacon() {
+  if (location.protocol !== 'http:') return;
+  try {
+    const txt = flog.join(' | ').replace(/<[^>]+>/g, '');
+    fetch('/_findlog?' + encodeURIComponent(txt).slice(0, 3500), { cache: 'no-store' }).catch(() => {});
+  } catch (e) {}
+}
 
 function sendVars() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -229,7 +474,7 @@ const round = v => Math.round(v * 1000) / 1000;
 //   (BlackHole/Loopback) feed the app. That routes the Spotify desktop app (which
 //   plays downloads offline) straight in, so the whole loop works with no internet.
 //   Setup: docs/offline-audio-macos.md.
-let curStream = null;
+let curStream = null, srcTouched = false;   // srcTouched = the user picked a source by hand
 async function startAudio() {
   const source = $('asrc').value;
   try {
@@ -251,6 +496,7 @@ async function startAudio() {
       }});
     }
     useStream(stream);
+    try { localStorage.setItem('pbsrc', source); } catch (e) {}   // re-select it next launch
     if (source !== 'display') populateInputs();              // labels are unlocked now
   } catch (e) {
     $('astat').textContent = 'denied / cancelled';
@@ -271,8 +517,11 @@ function useStream(stream) {
   analyser.smoothingTimeConstant = P.smooth;
   src.connect(analyser);                                     // not to destination = no echo
   freq = new Uint8Array(analyser.frequencyBinCount);
-  aTracks[0].addEventListener('ended', () => { $('adot').classList.remove('on'); $('astat').textContent = 'source ended'; });
+  aTracks[0].addEventListener('ended', () => { $('adot').classList.remove('on'); $('astat').textContent = 'source ended'; stopTicker(); });
   $('adot').classList.add('on'); $('astat').textContent = 'capturing';
+  // Which ticker won is worth surfacing: "audio thread" is the one that keeps
+  // streaming with the lid shut. "timer" still works, but only while visible.
+  startTicker().then(() => { $('astat').textContent = `capturing (${tickKind})`; });
 }
 
 // Fill the source dropdown with audio input devices. Labels are blank until the
@@ -290,7 +539,19 @@ async function populateInputs() {
     o.value = d.deviceId; o.textContent = d.label || `input ${i + 1}`;
     sel.appendChild(o);
   });
-  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+  // Pick a source: an explicit in-session choice wins, then the one saved from
+  // last time, then any virtual audio device by name — so BlackHole is selected
+  // for you rather than hunted for in the dropdown on every reload.
+  const saved = (() => { try { return localStorage.getItem('pbsrc'); } catch (e) { return null; } })();
+  const has = v => v && [...sel.options].some(o => o.value === v);
+  const wanted = Q.get('src');   // pinned by URL — wins over saved and auto-detected
+  const pinned = wanted && [...sel.options].find(o => o.textContent.toLowerCase().includes(wanted.toLowerCase()));
+  const virtual = [...sel.options].find(o => /blackhole|loopback|soundflower|virtual|aggregate/i.test(o.textContent));
+  if (pinned)                 sel.value = pinned.value;
+  else if (srcTouched && has(keep)) sel.value = keep;
+  else if (has(saved))        sel.value = saved;
+  else if (virtual)           sel.value = virtual.value;
+  else if (has(keep))         sel.value = keep;
 }
 
 // A one-shot getUserMedia unlocks device *labels* for enumerateDevices — the
@@ -301,6 +562,46 @@ async function listInputs() {
     probe.getTracks().forEach(t => t.stop());
   } catch (e) { $('astat').textContent = 'mic permission denied — device names hidden'; }
   await populateInputs();
+}
+
+// ── one-button start ───────────────────────────────────────────────────────
+// Connect → pick the virtual audio device → start capturing, in that order.
+// It exists as a *button* on purpose: Chrome won't let a page start an
+// AudioContext without a user gesture, and a click is the cheapest way to have
+// one. run.sh joins the Pixelblaze's wifi before this — a web page can't.
+async function startShow() {
+  const btn = $('show'), say = t => $('showstat').textContent = t;
+  btn.disabled = true;
+  try {
+    say('connecting to the Pixelblaze…');
+    let ok = await connect();
+    if (!ok) { say('not at that address — searching…'); await findPixelblaze(); }
+    ok = ws && ws.readyState === WebSocket.OPEN;
+    if (!ok) { say('no Pixelblaze found — check wifi, or set the IP by hand'); return; }
+
+    say('finding the audio device…');
+    await listInputs();                    // unlocks device labels, then auto-selects BlackHole
+    if ($('asrc').value === 'display') { say('no virtual audio device found — pick a source by hand'); return; }
+
+    say('starting audio…');
+    await startAudio();
+    if (!analyser) { say('audio did not start — check the source'); return; }
+    if (audioCtx && audioCtx.state === 'suspended') { say('browser blocked audio — click ▶ Start show again'); return; }
+    say(`running — ${$('asrc').selectedOptions[0].textContent}`);
+  } finally { btn.disabled = false; }
+}
+
+// run.sh opens the page with ?auto=1 and this tries the whole sequence without
+// a click. Chrome usually allows it once the origin already has mic permission;
+// if it refuses, nothing is lost — the button is right there.
+if (Q.get('auto') === '1') {
+  addEventListener('load', () => setTimeout(startShow, 400));
+} else {
+  // Otherwise still locate the device on start: the address in the box is only
+  // a guess (DHCP moves the Pixelblaze around between reboots), so check it and
+  // sweep for the real one now rather than waiting for someone to press find.
+  // If the guess is right this is one probe and it connects immediately.
+  addEventListener('load', () => setTimeout(findPixelblaze, 400));
 }
 
 // average normalized energy in a frequency range
@@ -320,34 +621,97 @@ function bandEnergyRaw(loHz, hiHz) {
   return n ? s / n / 255 : 0;
 }
 
-// ── main loop: analyze, draw, stream ───────────────────────────────────────
+// ── analysis + stream tick ─────────────────────────────────────────────────
+// Deliberately NOT on requestAnimationFrame. rAF only fires while the browser is
+// actually painting, so a closed lid, a slept display, or a backgrounded window
+// silently stops the stream while the machine is still wide awake — the lights
+// freeze on the last frame sent and nothing reports an error. Drawing is allowed
+// to stall; streaming is not. See docs/offline-network.md (unattended installs).
+function analyzeTick() {
+  if (!analyser) return;
+  const t = performance.now();
+  const dt = lastA ? t - lastA : 16; lastA = t;
+  if (analyser.smoothingTimeConstant !== P.smooth) analyser.smoothingTimeConstant = P.smooth;
+  analyser.getByteFrequencyData(freq);
+  bands.bass   = bandEnergy(20, 250);
+  bands.mid    = bandEnergy(250, 2000);
+  bands.treble = bandEnergy(2000, 8000);
+  bands.level  = bandEnergy(20, 16000);
+  // N log-spaced spectrum bands with per-band auto-gain (AGC): divide each band
+  // by its own slowly-decaying peak so loud bands (esp. bass) don't clip to a
+  // flat 1.0 — every band then uses its full 0..1 range and stays dynamic.
+  spectrum = [];
+  for (let i = 0; i < P.nbands; i++) {
+    const raw = bandEnergyRaw(bandEdges[i], bandEdges[i + 1]);
+    const p = specPeak[i] || 0;
+    specPeak[i] = raw > p ? raw : Math.max(raw, p - p * dt / 8000);   // slow peak decay
+    spectrum.push(Math.min(1, raw / Math.max(specPeak[i], 0.05)));    // normalize to peak
+  }
+  // beat detection + frame-rate-independent pulse decay (~120 ms).
+  detectBeat(t, bandEnergyRaw(20, 250));
+  beatPulse *= Math.exp(-dt / 120);
+  if (t - lastSend >= 1000 / P.rateHz) { sendVars(); lastSend = t; }
+}
+
+// What drives analyzeTick, best option first:
+//  • AudioWorklet — runs on the *audio* thread, which keeps going regardless of
+//    painting, display sleep, tab visibility or timer throttling. This is the one
+//    that survives a lid-closed install.
+//  • setInterval — fallback. Fine while the tab is visible, but Chrome throttles
+//    background timers toward ~1 Hz once the page is genuinely hidden.
+const TICK_HZ = 60;
+const TICKER_SRC = `
+class Ticker extends AudioWorkletProcessor {
+  constructor(o) { super(); this.every = o.processorOptions.every; this.n = 0; }
+  process() {                        // called every 128 frames, on the audio thread
+    if (++this.n >= this.every) { this.n = 0; this.port.postMessage(0); }
+    return true;                     // writes no output → silent
+  }
+}
+registerProcessor('ticker', Ticker);
+`;
+let tickNode = null, tickMute = null, tickTimer = null, tickKind = '', workletAdded = false;
+
+async function startTicker() {
+  stopTicker();
+  if (audioCtx && audioCtx.audioWorklet) {
+    try {
+      // addModule once per AudioContext — the context is reused across source
+      // switches, and re-registering the same processor name throws.
+      if (!workletAdded) {
+        const url = URL.createObjectURL(new Blob([TICKER_SRC], { type: 'application/javascript' }));
+        await audioCtx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        workletAdded = true;
+      }
+      const every = Math.max(1, Math.round(audioCtx.sampleRate / 128 / TICK_HZ));
+      tickNode = new AudioWorkletNode(audioCtx, 'ticker', { processorOptions: { every } });
+      tickNode.port.onmessage = analyzeTick;
+      // a node only runs while it's part of the graph; a 0-gain hop to destination
+      // keeps it scheduled without making any sound.
+      tickMute = audioCtx.createGain(); tickMute.gain.value = 0;
+      tickNode.connect(tickMute).connect(audioCtx.destination);
+      tickKind = 'audio thread';
+      return;
+    } catch (e) { /* no worklet (old browser, blocked blob) → fall through */ }
+  }
+  tickTimer = setInterval(analyzeTick, 1000 / TICK_HZ);
+  tickKind = 'timer';
+}
+function stopTicker() {
+  if (tickNode) { try { tickNode.port.onmessage = null; tickNode.disconnect(); } catch {} tickNode = null; }
+  if (tickMute) { try { tickMute.disconnect(); } catch {} tickMute = null; }
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  tickKind = '';
+}
+
+// ── draw loop: visuals only ────────────────────────────────────────────────
+// Safe to stall whenever the browser isn't painting — nobody is watching a
+// closed lid. It only reads whatever the analysis tick last produced.
 function loop(t) {
   requestAnimationFrame(loop);
   const dt = lastT ? t - lastT : 16; lastT = t;
-  if (analyser) {
-    if (analyser.smoothingTimeConstant !== P.smooth) analyser.smoothingTimeConstant = P.smooth;
-    analyser.getByteFrequencyData(freq);
-    bands.bass   = bandEnergy(20, 250);
-    bands.mid    = bandEnergy(250, 2000);
-    bands.treble = bandEnergy(2000, 8000);
-    bands.level  = bandEnergy(20, 16000);
-    // N log-spaced spectrum bands with per-band auto-gain (AGC): divide each band
-    // by its own slowly-decaying peak so loud bands (esp. bass) don't clip to a
-    // flat 1.0 — every band then uses its full 0..1 range and stays dynamic.
-    spectrum = [];
-    for (let i = 0; i < P.nbands; i++) {
-      const raw = bandEnergyRaw(bandEdges[i], bandEdges[i + 1]);
-      const p = specPeak[i] || 0;
-      specPeak[i] = raw > p ? raw : Math.max(raw, p - p * dt / 8000);   // slow peak decay
-      spectrum.push(Math.min(1, raw / Math.max(specPeak[i], 0.05)));    // normalize to peak
-    }
-    // beat detection + frame-rate-independent pulse decay (~120 ms).
-    detectBeat(t, bandEnergyRaw(20, 250));
-    beatPulse *= Math.exp(-dt / 120);
-    draw();
-    meters();
-    if (t - lastSend >= 1000 / P.rateHz) { sendVars(); lastSend = t; }
-  }
+  if (analyser) { draw(); meters(); }
   // The preview always animates — so idle patterns (the starfield's autonomous
   // twinkle/drift) render even before "Start audio". With no audio the bands are
   // 0, so audio-driven strip patterns just sit dark; the starfield still lives.
@@ -773,7 +1137,18 @@ function syncPreviewUI() {
 $('preview').addEventListener('change', syncPreviewUI);
 syncPreviewUI();
 
+// ?ip= wins (fixed installs), else the last address that connected here.
+if (Q.get('ip')) $('ip').value = Q.get('ip');
+else try { const ip = localStorage.getItem('pbip'); if (ip) $('ip').value = ip; } catch (e) {}
 $('connect').onclick = connect;
+$('find').onclick = findPixelblaze;
+$('flogtoggle').onclick = () => {
+  const el = $('flog');
+  el.style.display = el.style.display === 'block' ? 'none' : 'block';
+};
+$('show').onclick = startShow;
+$('asrc').onchange = () => { srcTouched = true;
+  try { localStorage.setItem('pbsrc', $('asrc').value); } catch (e) {} };
 $('audio').onclick = startAudio;
 $('devs').onclick = listInputs;
 populateInputs();                 // best-effort; names appear after "list inputs" grants permission

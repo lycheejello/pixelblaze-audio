@@ -54,6 +54,12 @@ read the scalars still work. For `bands`, the array length declared on the devic
 
 ## Pixelblaze / protocol facts
 - WebSocket is `ws://<ip>:81`. Set variables with a JSON text frame `{"setVars": {name: value}}`.
+- **AP mode**: hold the onboard button ~3.5 s (pre-V3: GP0→GND ~5 s) and the Pixelblaze
+  broadcasts its own `Pixelblaze_XXXXXX` network, fixed at **`192.168.4.1`** — no router,
+  no internet, no DHCP discovery. AP password must be **≥8 chars** or it's silently rejected.
+  This is the no-network install path (`docs/offline-network.md`).
+- The Pixelblaze's **USB port is power only** — the data lines aren't connected. There is no
+  serial control path; wifi is the only way in.
 - Patterns are PBscript (a JS subset): `beforeRender(delta)` + `render(index)` / `render2D` /
   `render3D`, builtins `hsv()`, `rgb()`, `clamp()`, `time()`, `wave()`, `hypot()`, `pixelCount`, etc.
 - `render2D(index, x, y)` fires when a **2D pixel map** is set (Pixelblaze Mapper tab);
@@ -65,6 +71,20 @@ read the scalars still work. For `bands`, the array length declared on the devic
   `nc`, `curl`, and **browsers** are exempt. This is why the streamer is browser-based —
   it sidesteps the whole problem. If a Python streamer is ever added, run it under
   Apple's `/usr/bin/python3` (or a `--symlinks` venv built from it).
+- **Discovery must be HTTP-first — never sweep a /24 over `ws://`.** Chrome throttles
+  WebSocket handshakes when many are pending, so a browser sweep of 254 hosts on :81
+  reports *every* host dead while the probes sit queued and their timeouts burn down.
+  Measured on this project: a full ws:// sweep declared all 253 hosts dead, then the
+  same Pixelblaze at `192.168.0.65` took **4704 ms** to complete a handshake `curl`
+  does instantly. `fetch` is not throttled that way, so `find` sweeps :80 with
+  `fetch(…, {mode:'no-cors'})` — an opaque response still proves a host is alive —
+  and only the handful that answer get a patient parallel ws:// probe.
+  Timing is the diagnostic: a probe refused in <60 ms was blocked before it hit the
+  network (Chrome's local-network permission, Chrome 142+), one that runs its full
+  timeout is a genuinely dead host. The find log in the app reports which.
+- **Sweep the right /24.** A page served from `localhost` can't tell what network it's
+  on, so `run.sh` passes the machine's LAN IP in as `?lan=`; the page also falls back
+  to `location.hostname` and a WebRTC host candidate.
 - `getDisplayMedia({audio:true})` is reliable in **Chrome**; the user must tick
   "Share audio" in the picker or no audio track arrives.
 

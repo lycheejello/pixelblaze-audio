@@ -1,8 +1,12 @@
 #!/bin/sh
 # Serve the streamer over http and open it in Chrome.
 #
-#   ./run.sh          # port 8000
-#   ./run.sh 9000     # another port
+#   ./run.sh              # serve on 8000, open the app on ?auto=1
+#   ./run.sh 9000         # another port
+#
+# Join the Pixelblaze's wifi network yourself before running this — a web page
+# has no API for it, and scripting it around a device that may or may not be
+# broadcasting was more trouble than picking it from the menu bar.
 #
 # http, not https: the page talks to the Pixelblaze over plain ws://, which an
 # https page would block as mixed content.
@@ -15,7 +19,22 @@ set -e
 
 PORT="${1:-${PORT:-8000}}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
-URL="http://localhost:$PORT/index.html"
+
+# This machine's LAN address, handed to the page as ?lan= so its "find" sweep
+# knows which /24 to scan. Without it the page has to guess (it's served from
+# localhost, which says nothing about the network), and sweeping the wrong /24
+# fills Chrome's socket pool with dead connections — the sweep of the real
+# subnet then comes back empty even when the Pixelblaze is sitting right there.
+lan_ip() {
+  ipconfig getifaddr en0 2>/dev/null && return 0
+  ipconfig getifaddr en1 2>/dev/null && return 0
+  hostname -I 2>/dev/null | awk '{print $1}' | grep . && return 0
+  return 1
+}
+LAN_IP="$(lan_ip || true)"
+
+URL="http://localhost:$PORT/index.html?auto=1"
+[ -n "$LAN_IP" ] && URL="$URL&lan=$LAN_IP"
 
 PY=/usr/bin/python3
 [ -x "$PY" ] || PY="$(command -v python3)"
@@ -37,8 +56,6 @@ if lsof -ti "tcp:$PORT" >/dev/null 2>&1; then
   open_browser
   exit 0
 fi
-
-LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || true)"
 
 echo "serving $DIR"
 echo "  → $URL"
