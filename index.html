@@ -226,6 +226,7 @@ function connect() {
     ws = new WebSocket(`ws://${ip}:${PB_PORT}`);
     ws.onopen  = () => { setWs(true, 'connected');
                          try { localStorage.setItem('pbip', ip); } catch (e) {}    // prefill next time
+                         foundBeacon(ip);                                          // run.sh opens its web UI
                          res(true); };
     ws.onclose = () => { setWs(false, 'disconnected'); res(false); };
     ws.onerror = () => { setWs(false, 'error (check IP / http page / same wifi)'); res(false); };
@@ -448,6 +449,17 @@ function beacon() {
     const txt = flog.join(' | ').replace(/<[^>]+>/g, '');
     fetch('/_findlog?' + encodeURIComponent(txt).slice(0, 3500), { cache: 'no-store' }).catch(() => {});
   } catch (e) {}
+}
+
+// Same trick, for the address we actually connected to: run.sh greps its own
+// server log for this and opens the Pixelblaze's web UI in a tab. The page can't
+// open it itself — window.open() with no click behind it is a popup, and the
+// ?auto=1 path has no click to spend. One dead request per new address.
+let beaconedIP = null;
+function foundBeacon(ip) {
+  if (location.protocol !== 'http:' || ip === beaconedIP) return;
+  beaconedIP = ip;
+  try { fetch('/_found?ip=' + encodeURIComponent(ip), { cache: 'no-store' }).catch(() => {}); } catch (e) {}
 }
 
 function sendVars() {

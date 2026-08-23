@@ -3,6 +3,7 @@
 #
 #   ./run.sh              # serve on 8000, open the app on ?auto=1
 #   ./run.sh 9000         # another port
+#   PORTAL=0 ./run.sh     # don't open the Pixelblaze's own web UI
 #
 # Join the Pixelblaze's wifi network yourself before running this — a web page
 # has no API for it, and scripting it around a device that may or may not be
@@ -39,16 +40,47 @@ URL="http://localhost:$PORT/index.html?auto=1"
 PY=/usr/bin/python3
 [ -x "$PY" ] || PY="$(command -v python3)"
 
+open_url() {
+  if [ "$(uname)" = "Darwin" ]; then
+    open -a "Google Chrome" "$1" 2>/dev/null || open "$1"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$1" >/dev/null 2>&1
+  else
+    echo "open this: $1"
+  fi
+}
+
 open_browser() {
   # give the server a moment, then open the page
   sleep 1
-  if [ "$(uname)" = "Darwin" ]; then
-    open -a "Google Chrome" "$URL" 2>/dev/null || open "$URL"
-  elif command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$URL" >/dev/null 2>&1
-  else
-    echo "open this: $URL"
-  fi
+  open_url "$URL"
+}
+
+# The page finds the Pixelblaze, not this script — it sweeps the LAN from the
+# browser, and DHCP moves the device between reboots, so the address isn't known
+# until it connects. So the page pings /_found?ip=… on this very server (a 404
+# it doesn't care about) and we watch the request log for it and open the
+# device's own web UI. That's where the patterns and the Mapper live, and it's
+# the thing you want next to the streamer anyway.
+#
+# Piping python's log through this instead of exec'ing it costs one subshell;
+# ctrl-c still reaches both, since it goes to the whole foreground group.
+serve() {
+  last_portal=''
+  "$PY" -u -m http.server "$PORT" --bind 0.0.0.0 2>&1 | while IFS= read -r line; do
+    printf '%s\n' "$line"
+    case "$line" in
+      *"/_found?ip="*)
+        [ "${PORTAL:-1}" = "0" ] && continue
+        ip=$(printf '%s' "$line" | sed -n 's|.*/_found?ip=\([0-9][0-9.]*\).*|\1|p')
+        [ -n "$ip" ] || continue
+        [ "$ip" = "$last_portal" ] && continue
+        last_portal="$ip"
+        echo "found a Pixelblaze at $ip — opening its web UI"
+        open_url "http://$ip/"
+        ;;
+    esac
+  done
 }
 
 if lsof -ti "tcp:$PORT" >/dev/null 2>&1; then
@@ -66,4 +98,4 @@ echo
 open_browser &
 
 cd "$DIR"
-exec "$PY" -m http.server "$PORT" --bind 0.0.0.0
+serve

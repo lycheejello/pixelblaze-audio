@@ -27,10 +27,16 @@ Visual walkthrough: **[`quickstart.html`](quickstart.html)** (open it from the a
    ```
    ./run.sh                    # serves this folder + opens Chrome
    ./run.sh 9000               # another port
+   PORTAL=0 ./run.sh           # don't open the Pixelblaze's own web UI
    # → http://localhost:8000/index.html?auto=1
    ```
    Join the Pixelblaze's wifi network yourself first (menu bar) — a web page has
    no API for it.
+
+   Once the page connects, `run.sh` also opens the **Pixelblaze's own web UI**
+   (`http://<its-ip>/` — patterns, Mapper, settings) in a second tab. The page
+   is what finds the device, so it pings `/_found?ip=…` back at the local server
+   and `run.sh` picks the address out of its request log.
 
    Equivalent by hand: `python3 -m http.server` from this folder. `run.sh` uses
    Apple's `/usr/bin/python3` so the LAN URL works from a phone (see the Local
@@ -187,7 +193,7 @@ RGBW so `tint`≈0 stars route to the cool-white channel = clean cold-white.
 ```
 index.html          # the streamer: audio capture + FFT + WebSocket + visualizer
 quickstart.html     # visual walkthrough (steps, sliders, contract, troubleshooting)
-run.sh              # serve this folder over http + open Chrome
+run.sh              # serve this folder over http + open Chrome (app + device web UI)
 docs/
   offline-audio-macos.md  # virtual-audio-device (BlackHole) setup for offline / desktop-app capture
   offline-network.md      # running with no router/internet: Pixelblaze AP mode (192.168.4.1)
