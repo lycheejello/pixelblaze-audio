@@ -52,6 +52,15 @@ read the scalars still work. For `bands`, the array length declared on the devic
 
 `setVars` only reaches the **active** pattern, so the reactive pattern must be running.
 
+**Multiple devices.** The app holds a `devices` array (one socket each), not a single
+`ws`; every send goes through `pbSend()`, which writes the same frame to each open
+socket and skips any that's backed up (`bufferedAmount`), so a slow device drops its
+own frames instead of stalling the show. The address box takes a comma-separated list,
+`find all` sweeps past the known-address shortcut and connects to everything it finds,
+and only the addresses that opened are saved to `pbip`. Devices are independent — they
+may run *different* patterns, and they free-run rather than frame-lock (true sync is
+Firestorm's job).
+
 ## Pixelblaze / protocol facts
 - WebSocket is `ws://<ip>:81`. Set variables with a JSON text frame `{"setVars": {name: value}}`.
 - **AP mode**: hold the onboard button ~3.5 s (pre-V3: GP0→GND ~5 s) and the Pixelblaze

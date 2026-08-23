@@ -61,6 +61,22 @@ Visual walkthrough: **[`quickstart.html`](quickstart.html)** (open it from the a
      `localhost` can't otherwise tell which network it's on. The `log` link next
      to the status dot shows exactly what it tried. The last good address is
      remembered across reloads.
+   - **Several Pixelblazes.** The address box takes a list —
+     `192.168.0.65, 192.168.0.220` — and the same stream goes to all of them:
+     one socket each, one FFT, the identical `setVars` frame written N times.
+     **find all** sweeps the subnet even when a known address answers, so a
+     second device isn't hidden behind the first one's cache hit, and connects
+     to everything it finds (plain **find** stops at the quick answer, which is
+     what you want on every launch after the first). The status line reads
+     `connected · 2 devices`, or `1 of 2 connected` if one is missing — hover it
+     for the per-device state. Only the addresses that actually opened get
+     remembered, so a typo doesn't stick around.
+
+     They don't have to run the same pattern: the strip can run `spectrum.js`
+     while the ceiling runs `starfield.js`, both fed by this one stream. Each
+     device just needs *a* reactive pattern active. Devices free-run rather than
+     frame-lock — invisible for beat-driven work; if you need true cross-device
+     sync, that's Electromage's **Firestorm**, not this app.
    - **Start audio.** Hit **Start audio**, then in the browser picker choose a
      **tab or screen with "Share audio" checked** (Chrome). Play music there.
 

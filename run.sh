@@ -66,7 +66,11 @@ open_browser() {
 # Piping python's log through this instead of exec'ing it costs one subshell;
 # ctrl-c still reaches both, since it goes to the whole foreground group.
 serve() {
-  last_portal=''
+  # Every address opened so far, space-delimited — not just the last one. The
+  # page can drive several Pixelblazes and beacons each of them, so a reload
+  # replays the whole set; matching only the previous address would reopen every
+  # tab but one on each reload.
+  opened=' '
   "$PY" -u -m http.server "$PORT" --bind 0.0.0.0 2>&1 | while IFS= read -r line; do
     printf '%s\n' "$line"
     case "$line" in
@@ -74,8 +78,8 @@ serve() {
         [ "${PORTAL:-1}" = "0" ] && continue
         ip=$(printf '%s' "$line" | sed -n 's|.*/_found?ip=\([0-9][0-9.]*\).*|\1|p')
         [ -n "$ip" ] || continue
-        [ "$ip" = "$last_portal" ] && continue
-        last_portal="$ip"
+        case "$opened" in *" $ip "*) continue ;; esac
+        opened="$opened$ip "
         echo "found a Pixelblaze at $ip — opening its web UI"
         open_url "http://$ip/"
         ;;

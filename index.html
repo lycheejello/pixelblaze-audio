@@ -63,9 +63,11 @@
 
   <div class="row">
     <span class="k">Pixelblaze</span>
-    <input type="text" id="ip" value="192.168.0.65" placeholder="192.168.x.x" />
+    <input type="text" id="ip" value="192.168.0.65" placeholder="192.168.x.x (comma-separate for several)"
+           title="One Pixelblaze, or several separated by commas — the same audio stream goes to all of them. They can run different patterns; each just needs a reactive one active." />
     <button id="connect">Connect</button>
     <button id="find" title="Find the Pixelblaze automatically: tries the AP-mode address (192.168.4.1), the last one that worked and the address in the box, then sweeps this machine&#39;s own /24 for anything answering ws:// on port 81. Runs on page load too.">find</button>
+    <button id="findall" title="Sweep the subnet even if the known addresses answer, and connect to every Pixelblaze found — use this to pick up a second device the quick check would stop before reaching. Takes a full sweep, so it is slower than find.">find all</button>
     <span class="dot" id="wsdot"></span><span class="k" id="wsstat">disconnected</span>
     <a class="lnk" id="flogtoggle">log</a>
   </div>
@@ -177,7 +179,7 @@ const $ = id => document.getElementById(id);
 // `src` matches the device *label*, not the id — deviceIds are randomised per
 // browser profile, so an id from anywhere else means nothing here.
 const Q = new URLSearchParams(location.search);
-let ws = null, audioCtx = null, analyser = null, freq = null;
+let audioCtx = null, analyser = null, freq = null;
 let bands = { bass:0, mid:0, treble:0, level:0 };
 let spectrum = [];          // N log-spaced 0..1 bands, recomputed each frame
 let specPeak = [];          // per-band rolling peak, for auto-gain (AGC)
@@ -214,26 +216,87 @@ function rebuildBandEdges() {
 }
 rebuildBandEdges();
 
-// ── WebSocket to the Pixelblaze (ws://ip:81) ───────────────────────────────
+// ── WebSockets to the Pixelblaze(s) (ws://ip:81) ───────────────────────────
+// One socket per device. `setVars` is fire-and-forget — no ack, no session
+// state, nothing to reconcile between devices — so driving several is the same
+// frame written to N sockets, and the FFT is computed once either way. They
+// free-run rather than frame-lock, which is invisible for beat-driven work;
+// true cross-device sync is Firestorm's job, not this app's.
+//
+// They don't have to run the same pattern: the strip can run spectrum.js while
+// the ceiling runs starfield.js, both fed by this one stream. Each just has to
+// have *a* reactive pattern active — setVars only reaches the running one.
 const PB_PORT = 81;
-function connect() {
-  const ip = $('ip').value.trim();
-  if (ws) { try { ws.close(); } catch {} ws = null; }
-  setWs(false, 'connecting…');
-  // resolves true once open, false on failure/timeout — so "Start show" can wait
-  // on it before moving to the audio step. Extra resolve() calls are no-ops.
+let devices = [];        // [{ip, ws, note}] — every device we stream to
+
+// The address box holds one address or a list: "192.168.0.65, 192.168.0.220".
+const parseIPs = s => (s || '').split(/[\s,;]+/).map(t => t.trim()).filter(Boolean);
+const openDevs = () => devices.filter(d => d.ws && d.ws.readyState === WebSocket.OPEN);
+
+// Every send goes through here, so nothing else has to know how many devices
+// there are. The backpressure check is per socket on purpose: one device on a
+// bad wifi link drops its own frames instead of stalling the whole show.
+function pbSend(obj) {
+  const msg = JSON.stringify(obj);
+  for (const d of devices) {
+    if (!d.ws || d.ws.readyState !== WebSocket.OPEN || d.ws.bufferedAmount > 512) continue;
+    try { d.ws.send(msg); } catch (e) {}
+  }
+}
+
+function closeAll() {
+  for (const d of devices) { try { d.ws && d.ws.close(); } catch (e) {} }
+  devices = [];
+}
+
+// One device. Resolves true once open, false on failure/timeout — extra
+// resolve() calls are no-ops, so a late close after a good open is harmless.
+function dial(ip) {
+  const d = { ip, ws: null, note: 'connecting…' };
+  devices.push(d);
   return new Promise(res => {
-    ws = new WebSocket(`ws://${ip}:${PB_PORT}`);
-    ws.onopen  = () => { setWs(true, 'connected');
-                         try { localStorage.setItem('pbip', ip); } catch (e) {}    // prefill next time
-                         foundBeacon(ip);                                          // run.sh opens its web UI
-                         res(true); };
-    ws.onclose = () => { setWs(false, 'disconnected'); res(false); };
-    ws.onerror = () => { setWs(false, 'error (check IP / http page / same wifi)'); res(false); };
+    d.ws = new WebSocket(`ws://${ip}:${PB_PORT}`);
+    d.ws.onopen  = () => { d.note = 'connected'; refreshWs(); saveIPs();
+                           foundBeacon(ip);                    // run.sh opens its web UI
+                           res(true); };
+    d.ws.onclose = () => { d.note = 'disconnected'; refreshWs(); res(false); };
+    d.ws.onerror = () => { d.note = 'error (check IP / http page / same wifi)'; refreshWs(); res(false); };
     setTimeout(() => res(false), 4000);
   });
 }
-function setWs(on, txt) { $('wsdot').classList.toggle('on', on); $('wsstat').textContent = txt; }
+
+// Connect to the box's list, or to an explicit one (what `find` hands over).
+// Resolves true once *any* device is open, so "Start show" can carry on with
+// three of four up rather than refusing to start the music.
+function connect(list) {
+  const ips = [...new Set(Array.isArray(list) ? list : parseIPs($('ip').value))];
+  closeAll();
+  if (!ips.length) { refreshWs('no address'); return Promise.resolve(false); }
+  $('ip').value = ips.join(', ');
+  refreshWs(ips.length > 1 ? `connecting to ${ips.length}…` : 'connecting…');
+  return Promise.all(ips.map(dial)).then(rs => { refreshWs(); return rs.some(Boolean); });
+}
+
+// Remember the set that actually opened, so next launch dials all of them. One
+// address stays a bare string here, which is what older builds wrote and read.
+function saveIPs() {
+  try { localStorage.setItem('pbip', openDevs().map(d => d.ip).join(',')); } catch (e) {}
+}
+
+// Dot + status line for a whole set: green if anything is up, and the count
+// only once there's more than one device to count. Per-device state hides in
+// the tooltip rather than making the line unreadable.
+function refreshWs(note) {
+  const open = openDevs().length, n = devices.length;
+  $('wsdot').classList.toggle('on', open > 0);
+  $('wsstat').textContent =
+    note        ? note :
+    !n          ? 'disconnected' :
+    !open       ? (n > 1 ? `none of ${n} connected` : 'disconnected (check IP / http page / same wifi)') :
+    open === n  ? (n > 1 ? `connected · ${n} devices` : 'connected') :
+                  `${open} of ${n} connected`;
+  $('wsstat').title = devices.map(d => `${d.ip} — ${d.note}`).join('\n');
+}
 
 // ── finding the Pixelblaze ─────────────────────────────────────────────────
 // No mDNS or discovery from a browser, so this brute-forces it: open a ws:// to
@@ -380,11 +443,16 @@ function sayBlocked() {
 }
 
 let finding = null;                       // one sweep at a time — the on-load
-function findPixelblaze() {               // autolocate and "Start show" share it
-  return finding || (finding = locate().finally(() => { finding = null; }));
+function findPixelblaze(all) {            // autolocate and "Start show" share it
+  return finding || (finding = locate(all).finally(() => { finding = null; }));
 }
 
-async function locate() {
+// all=false: stop as soon as the known addresses answer — one probe, instant,
+//   and it's what you want on every launch after the first.
+// all=true ("find all"): skip that shortcut and sweep the subnet anyway, so a
+//   *second* Pixelblaze gets found instead of being hidden behind the first
+//   one's cache hit. Slower by a sweep, which is why it's a separate button.
+async function locate(all) {
   const btn = $('find'), say = t => $('wsstat').textContent = t;
   btn.disabled = true;
   flog.length = 0; flogT0 = performance.now();
@@ -395,11 +463,11 @@ async function locate() {
     //    don't trip Chrome's throttle, and the device can take seconds to
     //    answer one even when it is sitting right there.
     say('looking…');
-    const sure = [...new Set([$('ip').value.trim(), localStorage.getItem('pbip'), '192.168.4.1'].filter(Boolean))];
+    const sure = [...new Set([...parseIPs($('ip').value), ...parseIPs(localStorage.getItem('pbip')), '192.168.4.1'])];
     const tried = await Promise.all(sure.map(ip => probeWs(ip, 4000)));
     for (const r of tried) dlog(`  ws://${r.ip}:81 → ${r.ok ? '<b>open</b>' : 'no'} (${Math.round(r.ms)} ms)`);
-    const known = tried.find(r => r.ok);
-    if (known) { $('ip').value = known.ip; dlog(`connecting to <b>${known.ip}</b>`); return connect(); }
+    const known = tried.filter(r => r.ok).map(r => r.ip);
+    if (known.length && !all) { dlog(`connecting to <b>${known.join(', ')}</b>`); return connect(known); }
     if (tried.every(r => r.ms < 60)) sayBlocked();
 
     // 2. Nothing known answered, so sweep — over :80, never ws:// (see above).
@@ -426,10 +494,20 @@ async function locate() {
       say(`checking ${alive.hits.length} hosts …`);
       const opens = await Promise.all(alive.hits.map(ip => probeWs(ip, 6000)));
       for (const r of opens) dlog(`  ws://${r.ip}:81 → ${r.ok ? '<b>open</b>' : 'no'} (${Math.round(r.ms)} ms)`);
-      const hit = opens.find(r => r.ok);
-      if (hit) { $('ip').value = hit.ip; dlog(`connecting to <b>${hit.ip}</b>`); return connect(); }
+      // every host that opens is a Pixelblaze — take them all, plus anything the
+      // known-address probes already turned up (an AP-mode device at
+      // 192.168.4.1 isn't on the subnet being swept).
+      const found = [...new Set([...known, ...opens.filter(r => r.ok).map(r => r.ip)])];
+      if (found.length) {
+        dlog(`found <b>${found.length}</b> — connecting to <b>${found.join(', ')}</b>`);
+        return connect(found);
+      }
       dlog('  hosts are alive there but none speaks WebSocket on :81 — open one in a tab ' +
            'and check whether it is the Pixelblaze', 'i');
+    }
+    if (known.length) {                     // "find all", sweep added nothing new
+      dlog(`the sweep found nothing further — connecting to <b>${known.join(', ')}</b>`);
+      return connect(known);
     }
     say('nothing found — open the log next to the dot');
     dlog('gave up. If a Pixelblaze is on this network, open its web UI in a tab to get the ' +
@@ -455,26 +533,25 @@ function beacon() {
 // server log for this and opens the Pixelblaze's web UI in a tab. The page can't
 // open it itself — window.open() with no click behind it is a popup, and the
 // ?auto=1 path has no click to spend. One dead request per new address.
-let beaconedIP = null;
+const beaconed = new Set();          // one portal tab per address, not per connect
 function foundBeacon(ip) {
-  if (location.protocol !== 'http:' || ip === beaconedIP) return;
-  beaconedIP = ip;
+  if (location.protocol !== 'http:' || beaconed.has(ip)) return;
+  beaconed.add(ip);
   try { fetch('/_found?ip=' + encodeURIComponent(ip), { cache: 'no-store' }).catch(() => {}); } catch (e) {}
 }
 
 function sendVars() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  // drop the frame if the socket is backed up, so latency can't snowball into a
-  // seconds-behind backlog that keeps playing after the audio stops.
-  if (ws.bufferedAmount > 512) return;
-  ws.send(JSON.stringify({ setVars: {
+  // pbSend drops the frame for any socket that's backed up, so latency can't
+  // snowball into a seconds-behind backlog that keeps playing after the audio
+  // stops — per device, so a slow one can't hold up the rest.
+  pbSend({ setVars: {
     bass:   round(bands.bass),
     mid:    round(bands.mid),
     treble: round(bands.treble),
     level:  round(bands.level),
     bands:  spectrum.map(round),     // N log-spaced bands, 20 Hz..16 kHz
     beat:   round(beatPulse),        // 1 on a detected beat, decaying to 0
-  }}));
+  }});
 }
 const round = v => Math.round(v * 1000) / 1000;
 
@@ -600,8 +677,8 @@ async function startShow() {
     say('connecting to the Pixelblaze…');
     let ok = await connect();
     if (!ok) { say('not at that address — searching…'); await findPixelblaze(); }
-    ok = ws && ws.readyState === WebSocket.OPEN;
-    if (!ok) { say('no Pixelblaze found — check wifi, or set the IP by hand'); return; }
+    const up = openDevs().length;
+    if (!up) { say('no Pixelblaze found — check wifi, or set the IP by hand'); return; }
 
     say('finding the audio device…');
     await listInputs();                    // unlocks device labels, then auto-selects BlackHole
@@ -611,7 +688,7 @@ async function startShow() {
     await startAudio();
     if (!analyser) { say('audio did not start — check the source'); return; }
     if (audioCtx && audioCtx.state === 'suspended') { say('browser blocked audio — click ▶ Start show again'); return; }
-    say(`running — ${$('asrc').selectedOptions[0].textContent}`);
+    say(`running — ${$('asrc').selectedOptions[0].textContent}${up > 1 ? ` → ${up} devices` : ''}`);
   } finally { btn.disabled = false; }
 }
 
@@ -1075,8 +1152,8 @@ for (const [label, k, min, max, step, help] of DLM_SLIDERS) {
   inp.oninput = () => {
     DLM[k] = parseFloat(inp.value); s2.textContent = DLM[k];
     localStorage.setItem('dlm', JSON.stringify(DLM));   // app remembers across reloads
-    // push the change straight to the device (no-op for other active patterns).
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ setVars: { [k]: DLM[k] } }));
+    // push the change straight to the device(s) (no-op for other active patterns).
+    pbSend({ setVars: { [k]: DLM[k] } });
   };
   l.append(s1, inp, s2); dlmBox.appendChild(l);
 }
@@ -1115,7 +1192,7 @@ for (const [label, k, min, max, step, help] of STAR_SLIDERS) {
   inp.oninput = () => {
     STAR[k] = parseFloat(inp.value); s2.textContent = STAR[k];
     localStorage.setItem('star', JSON.stringify(STAR));
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ setVars: { [k]: STAR[k] } }));
+    pbSend({ setVars: { [k]: STAR[k] } });
   };
   l.append(s1, inp, s2); starBox.appendChild(l);
 }
@@ -1161,11 +1238,15 @@ function syncPreviewUI() {
 $('preview').addEventListener('change', syncPreviewUI);
 syncPreviewUI();
 
-// ?ip= wins (fixed installs), else the last address that connected here.
-if (Q.get('ip')) $('ip').value = Q.get('ip');
-else try { const ip = localStorage.getItem('pbip'); if (ip) $('ip').value = ip; } catch (e) {}
-$('connect').onclick = connect;
-$('find').onclick = findPixelblaze;
+// ?ip= wins (fixed installs), else the addresses that connected here last time.
+// Either may be a comma-separated list: ?ip=192.168.0.65,192.168.0.220
+if (Q.get('ip')) $('ip').value = parseIPs(Q.get('ip')).join(', ');
+else try { const ip = localStorage.getItem('pbip'); if (ip) $('ip').value = parseIPs(ip).join(', '); } catch (e) {}
+// Arrow-wrapped, both of them: a bare handler is called with the MouseEvent,
+// which findPixelblaze would read as a truthy `all` and sweep on every click.
+$('connect').onclick = () => connect();
+$('find').onclick = () => findPixelblaze();
+$('findall').onclick = () => findPixelblaze(true);
 $('flogtoggle').onclick = () => {
   const el = $('flog');
   el.style.display = el.style.display === 'block' ? 'none' : 'block';
