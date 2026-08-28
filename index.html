@@ -33,6 +33,7 @@
   canvas#field { width:300px; height:300px; max-width:100%; aspect-ratio:1/1;
                  margin:12px auto 0; border-radius:50%; background:#06070a;
                  border:1px solid #1c2430; display:none; }
+  canvas#rig { height:300px; background:#06070a; border:1px solid #1c2430; display:none; }
   select { font:inherit; background:#11151b; color:#cdd6e0; border:1px solid #2a313c;
            border-radius:6px; padding:6px 9px; }
   .meters { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:12px; }
@@ -110,6 +111,7 @@
       <option value="plasma">plasma.js</option>
       <option value="sparkle">sparkle.js</option>
       <option value="starfield">starfield.js (2D star ceiling — the Shrine)</option>
+      <option value="bike-pulse">1_pulse — bike canopy (lives in bike-canopy-patterns)</option>
       <option value="depth-layers">depth-layers.js (2-strip)</option>
       <option value="depth-layers-mirror">depth-layers-mirror.js (2-strip)</option>
       <option value="crossed-spectrum">crossed-spectrum.js (2-strip)</option>
@@ -120,8 +122,10 @@
   </div>
   <canvas id="strip"></canvas>
   <canvas id="field" title="2D star ceiling preview — a top-down view of the dome. Each dot is a mapped pixel."></canvas>
+  <canvas id="rig" title="Bike canopy preview — side elevation. The mast is drawn as bare point-source LEDs; the canopy ring is drawn diffused, as it looks through fabric."></canvas>
   <div id="dlm-panel" style="display:none"></div>
   <div id="star-panel" style="display:none"></div>
+  <div id="canopy-panel" style="display:none"></div>
 
   <div class="note">
     1. Load <code>patterns/reactive.js</code> (scalar bands) or <code>patterns/spectrum.js</code>
@@ -148,6 +152,14 @@ const STAR = { twinkle: 0.7, twSpeed: 0.7, breathe: 0.5, drift: 0.5, shoot: 0.5,
 try { Object.assign(STAR, JSON.parse(localStorage.getItem('star') || '{}')); } catch (e) {}
 let starCount = 200;
 try { const sc = parseInt(localStorage.getItem('starCount')); if (sc) starCount = sc; } catch (e) {}
+
+// Mirror of bike-canopy-patterns/patterns/1_pulse/pulse.js exported vars. Zone
+// sizes are FRACTIONS, not counts, which is what lets one source run every
+// build — `build` picks which one the preview is showing (294 = the mixed-pitch
+// bike: a 144 px dense seat strip plus 150 sparse).
+const BIKE = { build: 300, seatFrac: 0.10, spineFrac: 0.23, canopyFrac: 0.65,
+               travelMs: 280, bandWidth: 0.35, bloomMs: 420 };
+try { Object.assign(BIKE, JSON.parse(localStorage.getItem('bikepulse') || '{}')); } catch (e) {}
 
 // The pixel map: a scattered disc of stars (a top-down view of the dome ceiling).
 // The same coords the "copy map" button exports for the Pixelblaze Mapper, so the
@@ -823,7 +835,8 @@ function loop(t) {
   // The preview always animates — so idle patterns (the starfield's autonomous
   // twinkle/drift) render even before "Start audio". With no audio the bands are
   // 0, so audio-driven strip patterns just sit dark; the starfield still lives.
-  if (isField($('preview').value)) drawField(dt); else drawStrip(dt);
+  const pv = $('preview').value;
+  if (isField(pv)) drawField(dt); else if (isRig(pv)) drawCanopy(dt); else drawStrip(dt);
 }
 
 const viz = $('viz'), vctx = viz.getContext('2d');
@@ -906,6 +919,87 @@ const PREVIEW = {
     pixel(f, i) { const baseV = clampv(eB * eB * 0.5 + eL * 0.08, 0, 0.6), baseH = 0.95 - eB * 0.12, s = spark[i] || 0;
       return s > 0.01 ? [0.6, 1 - s, Math.max(baseV, s)] : [baseH, 1, baseV]; },
   }; })(),
+
+  // Bike canopy: rig:true → drawCanopy renders a side elevation of the bike.
+  //
+  // ⚠️ The pattern this mirrors does NOT live in this repo. It is
+  // `patterns/1_pulse/pulse.js` in **bike-canopy-patterns** (the 8-Bit Bunny
+  // shade-canopy bikes), which owns everything that runs on those bikes. This
+  // is a mirror for auditioning with real audio — keep it in sync with THAT
+  // file, and change behaviour there first.
+  //
+  // What it does: one continuous WS2815 run, index 0 at the seat, split into
+  // seat → spine (the vertical mast) → canopy by *fractions* of pixelCount, so
+  // one source runs every build. A kick fires a wavefront up the mast; when it
+  // reaches the top the canopy blooms.
+  'bike-pulse': (() => {
+    let eLevel = 0, travel = 9, lastBeat = 0;
+    let stallMs = 0, lastSum = -1, idlePhase = 0, idle = 0, clock = 0;
+    let fires = 0, sinceFire = 1e9;      // onsets the pattern actually launched on
+    // the device's three builds; 294 is 144 dense seat px + 150 sparse.
+    const DENSE_SEAT = 144, DENSE_TOTAL = 294, DENSE_SPINE_BONUS = 10;
+    const SEAT_LIFT = 0.18;
+    // zone boundaries for the current build, exactly as layoutFor() does them
+    const bounds = () => {
+      const n = BIKE.build | 0;
+      const seatPx = n === DENSE_TOTAL ? DENSE_SEAT
+        : Math.floor(n * BIKE.seatFrac / (BIKE.seatFrac + BIKE.spineFrac + BIKE.canopyFrac));
+      const rest = n - seatPx, split = BIKE.spineFrac + BIKE.canopyFrac;
+      let b1 = seatPx, b2 = b1 + Math.floor(rest * BIKE.spineFrac / split);
+      if (n === DENSE_TOTAL) b2 += DENSE_SPINE_BONUS;
+      return [Math.min(b1, n), Math.min(b2, n), n];
+    };
+    return {
+      rig: true,
+      counts() { const [b1, b2, n] = bounds(); return { seat: b1, spine: b2 - b1, canopy: n - b2 }; },
+      before(dt) {
+        clock += dt / 1000; sinceFire += dt;
+        // advance BEFORE the drive, so a beat landing this frame renders at 0
+        travel += dt / BIKE.travelMs;
+        if (travel > 9) travel = 9;
+        // stall detection: with the stream dead the vars FREEZE rather than
+        // dropping to zero, so watch for them not changing (mirrors the device,
+        // and is why the preview still animates before you hit Start audio).
+        const sum = bands.level + beatPulse;
+        if (sum === lastSum) { stallMs += dt; if (stallMs > 2500) idle = 1; }
+        else { stallMs = 0; idle = 0; }
+        lastSum = sum;
+        if (idle) {
+          eLevel = 0.20 + 0.30 * wave(clock / 17);
+          const ph = (clock / 2.4) % 1;             // sawtooth; a wrap is the tick
+          if (ph < idlePhase) { travel = 0; fires++; sinceFire = 0; }
+          idlePhase = ph;
+          return;
+        }
+        eLevel = envF(bands.level, eLevel, dt, 250);
+        // ⚠️ Fire on the RISING EDGE, not on the value: `beat` is a decaying
+        // pulse, so its magnitude alone can't tell a new hit from the last one
+        // still fading. `sinceFire` exists only so the panel can show what the
+        // *pattern* triggered on — tuning "beat sens" against the envelope's
+        // shape instead is how you end up double-firing or missing hits.
+        if (beatPulse > lastBeat + 0.08) { travel = 0; fires++; sinceFire = 0; }
+        lastBeat = beatPulse;
+      },
+      idle: () => idle,
+      fires: () => fires,
+      justFired: () => sinceFire < 160,
+      // one paint path for every pixel, like the device's render(index)
+      pixel(zone, zpos) {
+        const h = 0.6 - eLevel * 0.42, glow = 0.02 + eLevel * 0.10;   // palette: dusk
+        let v = glow;
+        if (zone === 0) {
+          v = glow + SEAT_LIFT * clampv(1 - travel * 2.5);
+        } else if (zone === 1) {
+          const d = Math.abs(zpos - travel);
+          if (d < BIKE.bandWidth) v = Math.max(glow, 1 - d / BIKE.bandWidth);
+        } else if (travel >= 1) {
+          const age = (travel - 1) * BIKE.travelMs;
+          v = Math.max(glow, clampv(1 - age / BIKE.bloomMs));
+        }
+        return [h, 1, clampv(v)];
+      },
+    };
+  })(),
 
   // 2D star ceiling: field:true → drawField renders MAP2D positions, not a strip.
   // Faithful mirror of patterns/starfield.js (keep the two in sync).
@@ -1085,6 +1179,214 @@ function drawField(dt) {
   fctx.globalCompositeOperation = 'source-over';
 }
 
+// ── bike-canopy preview: a side elevation of the rig ────────────────────────
+// The point of this view is the *material difference* between the two zones,
+// because that is what you are iterating on:
+//
+//  • the mast is BARE leds — drawn as small hard point sources with a tight
+//    bloom, so an edge or a single sparkling pixel reads exactly as it will on
+//    the bike;
+//  • the canopy is DIFFUSE — its ring pixels are drawn as wide, low-alpha
+//    glows *and* they light a translucent fabric shape from behind, which is
+//    what actually reaches anyone's eye. Detail dissolves here on purpose: if a
+//    canopy effect looks mushy in this preview, it will look mushy on the road.
+//
+// The ring is seen edge-on, so it draws as an ellipse; the far half is dimmed
+// and drawn first so the near half overlaps it and the thing reads as 3D.
+const rig = $('rig'), rctx = rig.getContext('2d');
+const isRig = name => !!(PREVIEW[name] && PREVIEW[name].rig);
+function drawCanopy(dt) {
+  const w = rig.width = rig.clientWidth * devicePixelRatio;
+  const h = rig.height = rig.clientHeight * devicePixelRatio;
+  const pat = PREVIEW[$('preview').value]; if (!pat || !pat.rig) return;
+  pat.before(dt);
+  const dpr = devicePixelRatio;
+  const { seat, spine, canopy } = pat.counts();
+
+  // ── rig geometry ─────────────────────────────────────────────────────────
+  // Anchored on the WHEEL, because that is the one dimension everyone can read
+  // at a glance: a cruiser's wheelbase is about 1.6 wheel diameters, and getting
+  // that ratio wrong is what makes a drawn bike look like a chopper.
+  // ONE unit: the wheelbase. Everything else is a multiple of it, and it is
+  // sized so the whole rig — ground to canopy — fills the frame. Deriving the
+  // parts from the canvas instead is what let the bike shrink to a doodle in the
+  // corner while each individual proportion stayed correct.
+  const cx = w * 0.5;
+  const wheelbase = Math.min(w / 2.1, h / 2.3);
+  const wheelR = wheelbase * 0.30;                     // ~1.6 wheel diameters, a cruiser
+  const groundY = h * 0.95, axleY = groundY - wheelR;
+  // rear-biased: the canopy overhangs behind the rear wheel, the fork ahead of
+  // the front one, so centring on the wheelbase alone would sit it off-frame.
+  const rearX = cx - wheelbase * 0.44, frontX = rearX + wheelbase;
+  const bbX = rearX + wheelbase * 0.42, bbY = groundY - wheelR * 0.55;
+  const seatX = rearX + wheelbase * 0.14, seatY = axleY - wheelR * 1.3;
+  const headX = frontX - wheelbase * 0.13, headY = seatY + h * 0.02;
+
+  // The spine rises BEHIND the saddle, over the rear wheel — it is not a seat
+  // post. It starts up by the rear axle and carries the canopy at its top.
+  const mastX = rearX + wheelbase * 0.02;
+  // It clamps to the frame just behind the saddle — running it down to the axle
+  // draws a pole straight through the rear wheel, which is not where it mounts.
+  const mastFoot = seatY + wheelR * 0.18;
+  const canopyY = groundY - wheelbase * 1.75;          // canopy height off the ground
+
+  // The canopy is a RECTANGLE, long axis fore-aft. The mast carries its REAR
+  // end — the pole is at the left end of the canopy, not under its middle — and
+  // it reaches forward to sit just over the front wheel. In plan, x runs 0 (the
+  // mast) to canLen (the front edge), y runs across the bike.
+  const canLen = (frontX + wheelR * 0.2) - mastX;
+  const canHalfW = canLen * 0.28;                        // half its width across
+  const foreshorten = 0.42;                              // how flat the plan reads side-on
+  const ROT = 0.16;                                      // slight plan turn, radians
+  const cosR = Math.cos(ROT), sinR = Math.sin(ROT);
+  // t = 0..1 around the perimeter → [screen x, screen y, depth].
+  // ⚠️ Walked by ARC LENGTH, not a quarter of the pixels per side. On a
+  // rectangle those are very different: an even split would pack the short ends
+  // and starve the long rails, drawing a pixel spacing the build doesn't have.
+  // Depth is the UNROTATED across-axis, so the far rail dims as a rail — the
+  // rotation is only there to keep it reading as a rectangle in perspective
+  // instead of a flat slab seen exactly edge-on.
+  const canopyPoint = t => {
+    const L = canLen, Wd = canHalfW * 2, per = 2 * (L + Wd);
+    let d = (((t % 1) + 1) % 1) * per, x, y;
+    if (d < L)                 { x = d;                     y = -canHalfW; }
+    else if (d < L + Wd)       { x = L;                     y = -canHalfW + (d - L); }
+    else if (d < 2 * L + Wd)   { x = L - (d - L - Wd);      y = canHalfW; }
+    else                       { x = 0;                     y = canHalfW - (d - 2 * L - Wd); }
+    const xr = x * cosR - y * sinR, yr = x * sinR + y * cosR;
+    return [mastX + xr, canopyY - yr * foreshorten, y];
+  };
+  // corners sit at these arc-length fractions, not at k/4
+  const canopyPath = () => {
+    const L = canLen, Wd = canHalfW * 2, per = 2 * (L + Wd);
+    const corners = [0, L, L + Wd, 2 * L + Wd].map(d => d / per);
+    rctx.beginPath();
+    corners.forEach((t, k) => {
+      const [px, py] = canopyPoint(t);
+      k ? rctx.lineTo(px, py) : rctx.moveTo(px, py);
+    });
+    rctx.closePath();
+  };
+
+  rctx.globalCompositeOperation = 'source-over';
+  rctx.fillStyle = '#06070a'; rctx.fillRect(0, 0, w, h);
+
+  // ── structure, dim, so the light has something to be attached to ──────────
+  const line = (x1, y1, x2, y2) => { rctx.moveTo(x1, y1); rctx.lineTo(x2, y2); };
+  rctx.strokeStyle = '#232c3a'; rctx.lineWidth = 2 * dpr;
+  rctx.beginPath();
+  rctx.arc(rearX, axleY, wheelR, 0, 6.283);            // wheels
+  rctx.moveTo(frontX + wheelR, axleY);
+  rctx.arc(frontX, axleY, wheelR, 0, 6.283);
+  line(cx - wheelbase * 0.95, groundY, cx + wheelbase * 0.95, groundY);   // ground
+  rctx.stroke();
+  rctx.beginPath();                                    // frame
+  line(seatX, seatY, bbX, bbY);                        // seat tube
+  line(bbX, bbY, headX, headY);                        // down tube
+  line(seatX, seatY, headX, headY);                    // top tube
+  line(rearX, axleY, bbX, bbY);                        // chainstay
+  line(rearX, axleY, seatX, seatY);                    // seat stay
+  line(headX, headY, frontX, axleY);                   // fork
+  line(headX - wheelbase * 0.07, headY - h * 0.014,
+       headX + wheelbase * 0.05, headY - h * 0.014);   // bars
+  rctx.stroke();
+  rctx.beginPath();                                    // saddle
+  line(seatX - wheelbase * 0.09, seatY, seatX + wheelbase * 0.06, seatY);
+  rctx.stroke();
+  rctx.beginPath();                                    // the spine, behind the saddle
+  line(mastX, mastFoot, mastX, canopyY);
+  rctx.stroke();
+  // the canopy frame is a fixture, not a light: dimmer than the bike, so the
+  // glow sitting on it is what the eye goes to.
+  rctx.strokeStyle = '#1a212c';
+  canopyPath(); rctx.stroke();
+
+  // ── the diffusing fabric, lit from behind by the canopy's average colour ──
+  // Averaging is the honest model: nobody sees an individual canopy pixel, they
+  // see the sheet it is behind.
+  let ar = 0, ag = 0, ab = 0;
+  const cols = [];
+  for (let i = 0; i < canopy; i++) {
+    const [hh, ss, vv] = pat.pixel(2, i / Math.max(canopy - 1, 1));
+    const c = hsv2arr(hh, ss, vv);
+    cols.push(c); ar += c[0]; ag += c[1]; ab += c[2];
+  }
+  if (canopy) { ar /= canopy; ag /= canopy; ab /= canopy; }
+  const lit = (ar + ag + ab) / 765;
+  if (lit > 0.002) {
+    // centred on the middle of the rectangle, not on the mast — the mast is at
+    // one END of it now, and a gradient centred there lights only the back half.
+    const midX = mastX + canLen * 0.5 * cosR, midY = canopyY - canLen * 0.5 * sinR * foreshorten;
+    const grd = rctx.createRadialGradient(midX, midY, 0, midX, midY, canLen * 0.75);
+    grd.addColorStop(0,   `rgba(${ar | 0},${ag | 0},${ab | 0},${0.30 + lit * 0.35})`);
+    grd.addColorStop(0.6, `rgba(${ar | 0},${ag | 0},${ab | 0},${0.10 + lit * 0.20})`);
+    grd.addColorStop(1,   'rgba(0,0,0,0)');
+    rctx.fillStyle = grd;
+    canopyPath(); rctx.fill();
+  }
+
+  rctx.globalCompositeOperation = 'lighter';           // everything below is light
+
+  // ── canopy perimeter: far side first, then the near side over it ──────────
+  for (const pass of [0, 1]) {
+    for (let i = 0; i < canopy; i++) {
+      const [px, py, depth] = canopyPoint(i / canopy);
+      const far = depth > 0;
+      if ((pass === 0) !== far) continue;
+      const [r, g, b] = cols[i];
+      const v = (r + g + b) / 765;
+      if (v < 0.004) continue;
+      const dim = far ? 0.45 : 1;                      // depth cue
+      // WIDE and soft: this is light through fabric, not a visible LED
+      const rad = (8 + v * 22) * dpr;
+      const grd = rctx.createRadialGradient(px, py, 0, px, py, rad);
+      grd.addColorStop(0,    `rgba(${r},${g},${b},${0.55 * dim})`);
+      grd.addColorStop(0.45, `rgba(${r},${g},${b},${0.18 * dim})`);
+      grd.addColorStop(1,    'rgba(0,0,0,0)');
+      rctx.fillStyle = grd;
+      rctx.beginPath(); rctx.arc(px, py, rad, 0, 6.283); rctx.fill();
+    }
+  }
+
+  // ── spine: BARE leds. Hard dot, tight bloom, nothing smeared ──────────────
+  for (let i = 0; i < spine; i++) {
+    const t = spine > 1 ? i / (spine - 1) : 0;         // 0 at the foot, 1 at the canopy
+    const [hh, ss, vv] = pat.pixel(1, t);
+    if (vv < 0.004) continue;
+    const [r, g, b] = hsv2arr(hh, ss, vv);
+    const py = mastFoot - t * (mastFoot - canopyY);
+    const bloom = (2.5 + vv * 7) * dpr;
+    const grd = rctx.createRadialGradient(mastX, py, 0, mastX, py, bloom);
+    grd.addColorStop(0, `rgba(${r},${g},${b},0.9)`);
+    grd.addColorStop(1, 'rgba(0,0,0,0)');
+    rctx.fillStyle = grd;
+    rctx.beginPath(); rctx.arc(mastX, py, bloom, 0, 6.283); rctx.fill();
+    rctx.fillStyle = `rgb(${r},${g},${b})`;            // the emitter itself, crisp
+    rctx.beginPath(); rctx.arc(mastX, py, 1.6 * dpr, 0, 6.283); rctx.fill();
+  }
+
+  // ── seat cluster: the low swell under the rider ───────────────────────────
+  const [sh, ss2, sv] = pat.pixel(0, 0);
+  if (sv > 0.004) {
+    const [r, g, b] = hsv2arr(sh, ss2, sv);
+    // ⚠️ Draw every seat pixel across a FIXED span, never spaced with the rest
+    // of the run. On the 294 build the seat is a 144 px high-density strip over
+    // a short stretch of bike; spacing all 294 evenly would make that build look
+    // plausible while being wrong, which is exactly how the real bug presented.
+    const dense = seat > 40;
+    for (let i = 0; i < seat; i++) {
+      const px = seatX - wheelbase * 0.07 + (seat > 1 ? i / (seat - 1) : 0) * wheelbase * 0.12;
+      const rad = (dense ? 1.6 + sv * 4 : 3 + sv * 10) * dpr;
+      const grd = rctx.createRadialGradient(px, seatY - dpr, 0, px, seatY - dpr, rad);
+      grd.addColorStop(0, `rgba(${r},${g},${b},0.75)`);
+      grd.addColorStop(1, 'rgba(0,0,0,0)');
+      rctx.fillStyle = grd;
+      rctx.beginPath(); rctx.arc(px, seatY - dpr, rad, 0, 6.283); rctx.fill();
+    }
+  }
+  rctx.globalCompositeOperation = 'source-over';
+}
+
 function drawStrip(dt) {
   const w = strip.width = strip.clientWidth * devicePixelRatio;
   const h = strip.height = strip.clientHeight * devicePixelRatio;
@@ -1235,12 +1537,120 @@ mapCopy.onclick = () => {
 };
 starBox.appendChild(mapCopy);
 
+// ── bike-canopy tuning panel (shown only when 1_pulse is the active preview) ─
+// These are the pattern's OWN controls, with the pattern's own slider ranges —
+// so a position found here maps straight onto the device. The pattern exports
+// each as a var, so they also stream live over setVars while you watch the bike.
+//
+// "copy controls" writes bike-canopy-patterns' controls.json format (slider
+// positions 0..1, inverted back through each range), because that repo's
+// push-patterns.py rewrites control positions from that file on every push —
+// export vars pasted into the source would be overwritten on the next flash.
+const canBox = $('canopy-panel');
+const BIKE_SLIDERS = [
+  ['seat',   'seatFrac',   'sliderSeat',   0.01, 0.30, 0.01, 'Seat zone as a fraction of the run. On the 294 px build this does nothing — the seat there is physically the dense strip.'],
+  ['spine',  'spineFrac',  'sliderSpine',  0.05, 0.60, 0.01, 'The vertical mast, as a fraction of what is left after the seat.'],
+  ['canopy', 'canopyFrac', 'sliderCanopy', 0.05, 0.90, 0.01, 'The overhead run — the long zone.'],
+  ['travel', 'travelMs',   'sliderTravel', 120,  700,  10,   'Milliseconds for the wavefront to climb the mast. Tune so the arrival lands with the music.'],
+  ['width',  'bandWidth',  'sliderWidth',  0.08, 0.68, 0.01, 'How much of the mast the travelling band covers. The mast is dark ahead of and behind it.'],
+  ['bloom',  'bloomMs',    'sliderBloom',  120,  1020, 10,   'Milliseconds the canopy takes to fall away after the front reaches the top.'],
+];
+const bikeHdr = document.createElement('div'); bikeHdr.className = 'k';
+bikeHdr.textContent = '1_pulse — live (streams to the device if connected) · pattern source lives in bike-canopy-patterns';
+canBox.appendChild(bikeHdr);
+// ⚠️ setVars writes the exported var DIRECTLY and so bypasses the clamp inside
+// the pattern's slider function — each range below IS the clamp, and must stay
+// equal to the pattern's own. Stale/garbage control positions (1e+22, 3.9e-38)
+// have come back off real hardware; don't add our own way in.
+const bikeSliders = {};
+for (const [label, k, , min, max, step, help] of BIKE_SLIDERS) {
+  const l = document.createElement('label'); l.className = 'sld'; l.title = help; l.style.cursor = 'help';
+  const s1 = document.createElement('span'); s1.textContent = label;
+  const inp = document.createElement('input'); inp.type = 'range';
+  inp.min = min; inp.max = max; inp.step = step; inp.value = BIKE[k];
+  bikeSliders[k] = l;
+  const s2 = document.createElement('span'); s2.textContent = BIKE[k];
+  inp.oninput = () => {
+    BIKE[k] = parseFloat(inp.value); s2.textContent = BIKE[k];
+    localStorage.setItem('bikepulse', JSON.stringify(BIKE));
+    pbSend({ setVars: { [k]: BIKE[k] } });
+  };
+  l.append(s1, inp, s2); canBox.appendChild(l);
+}
+// which build the preview is showing. Not a device control — the Pixelblaze
+// takes its count from Settings → LED count and the pattern reads pixelCount.
+{
+  const BUILDS = [150, 294, 300];
+  const l = document.createElement('label'); l.className = 'sld';
+  l.title = 'Which of the three builds to preview. 294 is the mixed-pitch bike: a 144 px dense seat strip plus 150 sparse, where the pattern sizes the seat by COUNT and gives the spine 10 extra pixels. Preview only — the device gets this from its own LED count.';
+  l.style.cursor = 'help';
+  const s1 = document.createElement('span'); s1.textContent = 'build';
+  const inp = document.createElement('input'); inp.type = 'range';
+  inp.min = 0; inp.max = 2; inp.step = 1; inp.value = Math.max(0, BUILDS.indexOf(BIKE.build));
+  const s2 = document.createElement('span'); s2.textContent = BIKE.build + ' px';
+  inp.oninput = () => {
+    BIKE.build = BUILDS[+inp.value]; s2.textContent = BIKE.build + ' px';
+    localStorage.setItem('bikepulse', JSON.stringify(BIKE));
+  };
+  l.append(s1, inp, s2); canBox.appendChild(l);
+}
+{
+  const copy = document.createElement('button'); copy.textContent = 'copy controls';
+  copy.title = 'controls.json for bike-canopy-patterns/patterns/1_pulse/ — slider positions, not export vars.';
+  copy.onclick = () => {
+    const pos = {};
+    for (const [, k, slider, min, max] of BIKE_SLIDERS) {
+      pos[slider] = Math.round(((BIKE[k] - min) / (max - min)) * 1e9) / 1e9;
+    }
+    const txt = JSON.stringify(Object.fromEntries(Object.keys(pos).sort().map(k => [k, pos[k]])), null, 2);
+    navigator.clipboard?.writeText(txt);
+    copy.textContent = 'copied! (→ 1_pulse/controls.json)';
+    setTimeout(() => copy.textContent = 'copy controls', 1800);
+  };
+  canBox.appendChild(copy);
+  // ⚠️ A LIT BIKE IS NOT PROOF THE STREAM IS ALIVE. When the device's stall
+  // detector trips it falls back to an internal animation that looks like a
+  // working show, so the pattern exports `idle` to tell the two apart — and it
+  // is worth a lamp rather than a line of text nobody reads.
+  const row = document.createElement('div'); row.className = 'row'; row.style.marginTop = '8px';
+  const sDot = document.createElement('span'); sDot.className = 'dot';
+  const sTxt = document.createElement('span'); sTxt.className = 'k';
+  const bDot = document.createElement('span'); bDot.className = 'dot';
+  const bTxt = document.createElement('span'); bTxt.className = 'k';
+  bTxt.textContent = 'onset';
+  bDot.title = 'Lights on each onset the PATTERN launched a pulse on — its own rising-edge test (beat > last + 0.08), not the beat envelope. Tune "beat sens" against this, not against how the meter looks.';
+  sDot.title = 'Green while the device is seeing a live stream; dark once its stall detector has fallen back to the internal idle animation.';
+  row.append(sDot, sTxt, bDot, bTxt);
+  canBox.appendChild(row);
+
+  const note = document.createElement('div'); note.className = 'k';
+  note.style.marginTop = '6px';
+  const pat = PREVIEW['bike-pulse'];
+  const sync = () => {
+    const c = pat.counts();
+    note.textContent = `${BIKE.build} px → seat ${c.seat} · spine ${c.spine} · canopy ${c.canopy}`;
+    // on the mixed-pitch build the seat is the dense strip: sliderSeat is inert
+    const inert = BIKE.build === 294;
+    bikeSliders.seatFrac.style.opacity = inert ? 0.35 : 1;
+    bikeSliders.seatFrac.title = inert
+      ? 'Inert on the 294 build — the seat there is physically the 144 px dense strip, and its length is not ours to choose.'
+      : BIKE_SLIDERS[0][6];
+    sDot.classList.toggle('on', !pat.idle());
+    sTxt.textContent = pat.idle() ? 'no stream — device is on its idle fallback' : 'streaming';
+    bDot.classList.toggle('on', pat.justFired());
+  };
+  sync(); canBox.addEventListener('input', sync); setInterval(sync, 80);
+  canBox.appendChild(note);
+}
+
 // show the right preview canvas + panel for the selected pattern.
 function syncPreviewUI() {
-  const isF = isField($('preview').value);
-  $('strip').style.display = isF ? 'none' : '';
+  const pv = $('preview').value, isF = isField(pv), isR = isRig(pv);
+  $('strip').style.display = (isF || isR) ? 'none' : '';
   $('field').style.display = isF ? 'block' : 'none';
-  starBox.style.display = $('preview').value === 'starfield' ? '' : 'none';
+  $('rig').style.display   = isR ? 'block' : 'none';
+  starBox.style.display = pv === 'starfield' ? '' : 'none';
+  canBox.style.display  = isR ? '' : 'none';
 }
 $('preview').addEventListener('change', syncPreviewUI);
 syncPreviewUI();

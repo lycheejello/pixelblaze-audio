@@ -183,6 +183,52 @@ Exact star positions needn't match the physically-hung pixels — a random scatt
 still reads as a believable sky. On **RGBW** pixels (SK6812) set the LED type to
 RGBW so `tint`≈0 stars route to the cool-white channel = clean cold-white.
 
+## Bike canopy — seat · spine · canopy
+
+A preview for the **8-Bit Bunny shade-canopy bikes**: one continuous WS2815 run,
+index 0 at the seat, climbing a vertical **spine** (the mast) and out along the
+**canopy** overhead.
+
+> **The pattern is not in this repo.** It is `patterns/1_pulse/pulse.js` in
+> **bike-canopy-patterns**, which owns everything that runs on those bikes.
+> What lives here is the *mirror* — change behaviour there first, then re-sync
+> this. Only the app side of the contract (what gets streamed) belongs here.
+
+Select `1_pulse` in the preview for a **side elevation** of the bike with a live
+tuning panel. The two zones are drawn with deliberately different material,
+because that is what the hardware does to them: the spine is **bare LEDs**, drawn
+as hard point sources, so an edge reads exactly as it will on the bike; the
+canopy is **behind fabric**, drawn as wide soft glows lighting a translucent
+shape from behind. If a canopy effect looks mushy here it will look mushy on the
+road.
+
+Geometry follows the build: a **rectangular** canopy, long axis fore-aft, carried
+at its **rear end** by a mast that rises **behind the saddle, over the rear
+wheel** — not a seat post — and reaching forward to sit just over the front
+wheel. It is drawn in perspective with the far rail dimmed, and the perimeter run
+is spaced by *arc length*, so the long rails and the short ends get pixels in the
+proportion the actual strip does.
+
+What it shows, and why each one is there:
+
+| | |
+|---|---|
+| **the pulse** | a kick fires a wavefront up the spine; when it reaches the top the canopy blooms. The seat only *acknowledges* the beat — it stays under the band so the launch reads as starting at the foot of the mast. |
+| **build** | 150 / 294 / 300 px. The device picks this from its own *Settings → LED count*; the preview lets you eyeball each. **294 is the mixed-pitch bike** — a 144 px dense seat strip plus 150 sparse — where the pattern sizes the seat by *count* and hands the spine 10 extra pixels. The preview draws that seat at its real density across a fixed span, so the dense build can't look plausible while being wrong. |
+| **stream lamp** | ⚠️ **a lit bike is not proof the stream is alive.** When the device stops seeing frames it falls back to an internal animation that looks like a working show. The pattern exports `idle` to tell them apart, and this lamp is it. |
+| **onset lamp** | lights on the onsets the *pattern* launched on — its own rising-edge test (`beat > last + 0.08`), not the beat envelope's shape. Tune **beat sens** against this. |
+
+Zone sizes are **fractions**, not counts, which is what lets one source run every
+build: 150 → 15/35/100, 300 → 30/70/200. The sliders carry the pattern's own
+ranges, and stream live over `setVars` while you watch the bike — ⚠️ `setVars`
+writes the exported var directly and so *bypasses the clamp* inside the pattern's
+slider function, which is why each range here has to stay equal to the pattern's.
+
+**copy controls** emits `controls.json` in bike-canopy-patterns' own format
+(slider positions 0..1, inverted back through each range) — not `export var`
+lines, because that repo's `push-patterns.py` rewrites control positions from
+that file on every push and would overwrite pasted defaults on the next flash.
+
 ## Notes / gotchas
 
 - **Chrome** is the reliable browser for `getDisplayMedia({audio:true})`. Tab audio

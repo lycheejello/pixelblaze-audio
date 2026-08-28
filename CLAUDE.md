@@ -20,7 +20,34 @@ hardware. Three render paths in `index.html`:
 - **strip** (`drawStrip`) — single-strip patterns (`pixel(f,i,n)`).
 - **two-strip rows** — `rows()` returns `[{n,pixel},…]`, drawn stacked.
 - **field** (`drawField`) — for `field:true` patterns (starfield): draws `MAP2D`
-  positions as soft additive glows = a top-down dome view. The starfield panel has
+  positions as soft additive glows = a top-down dome view.
+- **rig** (`drawCanopy`) — for `rig:true` patterns (`bike-pulse`): a side elevation of the
+  bike. Deliberately renders the two zones with different *material*: mast pixels are
+  hard point sources with a tight bloom (bare LEDs), canopy pixels are wide low-alpha
+  glows that also light a translucent fabric shape from behind (diffuse). Geometry per
+  the build: a **rectangular** canopy, long axis fore-aft, carried at its **rear end**
+  by a mast that rises **behind the saddle, over the rear wheel** (not a seat post),
+  reaching forward to sit just over the front wheel. Everything scales off ONE unit,
+  the wheelbase (~1.6 wheel diameters), so the rig fills the frame at any canvas size.
+  ⚠️ The perimeter is walked by **arc length**, not a quarter of the pixels per side —
+  on a rectangle an even split packs the short ends and starves the long rails, drawing
+  a pixel spacing the build does not have. The far rail is dimmed and drawn first for
+  depth, using the *unrotated* across-axis so the small plan rotation (which keeps it
+  reading as a rectangle in perspective, not a flat slab) doesn't leak into the depth
+  cue.
+  Mirrors expose `counts()` + `pixel(zone, zpos)` instead of `pixel(f,i,n)`.
+
+⚠️ **The `bike-pulse` preview mirrors a pattern in ANOTHER repo**:
+`~/Develop/bike-canopy-patterns/patterns/1_pulse/pulse.js` (branch `main` — the
+top-level checkout may sit on a different branch that forked before the audio work;
+mirror `main`). That repo owns everything running on the 8-Bit Bunny bikes; this
+repo owns only the app side of the contract. Change behaviour there first, then
+re-sync the mirror here. Its `1_*` lane reads the streamed vars and does nothing
+without this app running; `level` is load-bearing there — it is the liveness signal
+for a stall detector, because `beat` sits at 0 through ambient passages, so an app
+that stopped sending `level` would silently drop the bikes to their idle animation
+mid-track. A headless check of the mirror lives in the session scratchpad pattern of
+`check-mirror.mjs` (zone table + stall + onset assertions). The starfield panel has
   a **stars** count (regenerates `MAP2D`), **copy map** (→ Pixelblaze Mapper, 2D),
   and **copy settings** (→ the pattern's `export var` defaults), plus live knobs
   that stream to the device (same live-tuning pattern as the depth-layers-mirror panel).
