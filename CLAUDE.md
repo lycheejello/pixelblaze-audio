@@ -66,7 +66,11 @@ Firestorm's job).
 - **AP mode**: hold the onboard button ~3.5 s (pre-V3: GP0→GND ~5 s) and the Pixelblaze
   broadcasts its own `Pixelblaze_XXXXXX` network, fixed at **`192.168.4.1`** — no router,
   no internet, no DHCP discovery. AP password must be **≥8 chars** or it's silently rejected.
-  This is the no-network install path (`docs/offline-network.md`).
+  This is the no-network install path for **one** device (`docs/offline-network.md`).
+- **Two Pixelblazes can't both be in AP mode**: separate networks, one radio on the laptop,
+  and both hardcoded to `192.168.4.1`. Past one device the network has to come from
+  somewhere else — macOS **Internet Sharing** (Mac becomes the AP, `192.168.2.x`, its own
+  address on `bridge100` not `en0`) or a router with no WAN. Same doc.
 - The Pixelblaze's **USB port is power only** — the data lines aren't connected. There is no
   serial control path; wifi is the only way in.
 - Patterns are PBscript (a JS subset): `beforeRender(delta)` + `render(index)` / `render2D` /

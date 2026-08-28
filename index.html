@@ -389,7 +389,10 @@ async function localAddrs() {
     if (!isLanIP(ip) || out.includes(ip)) return;
     out.push(ip); dlog(`this machine is at <b>${ip}</b> (${how})`);
   };
-  add(Q.get('lan'), '?lan=, from run.sh');
+  // run.sh hands over every address this machine has — with Internet Sharing on
+  // it is both the router (bridge100) and possibly a client of something else,
+  // and only one of those subnets has the Pixelblazes on it.
+  for (const ip of parseIPs(Q.get('lan'))) add(ip, '?lan=, from run.sh');
   add(location.hostname, 'page is served from it');
   try {
     const pc = new RTCPeerConnection({ iceServers: [] });
@@ -474,7 +477,11 @@ async function locate(all) {
     //    The /24 this machine is on first, then the usual home-router ranges.
     const mine = await localAddrs();
     const subs = mine.map(sub24).filter((s, i, a) => a.indexOf(s) === i);
-    const guesses = ['192.168.1.', '192.168.0.', '10.0.0.', '10.0.1.'].filter(s => !subs.includes(s));
+    // 192.168.2. is macOS Internet Sharing's range — the laptop-as-router setup
+    // for a field install, where ?lan= can come back empty (the Mac's address on
+    // that network is on bridge100, which not every caller thinks to look at).
+    const guesses = ['192.168.1.', '192.168.0.', '192.168.2.', '10.0.0.', '10.0.1.']
+                      .filter(s => !subs.includes(s));
 
     for (const s of [...subs, ...guesses]) {
       const own = mine.find(ip => sub24(ip) === s);

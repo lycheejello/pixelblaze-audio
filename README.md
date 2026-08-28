@@ -216,7 +216,7 @@ quickstart.html     # visual walkthrough (steps, sliders, contract, troubleshoot
 run.sh              # serve this folder over http + open Chrome (app + device web UI)
 docs/
   offline-audio-macos.md  # virtual-audio-device (BlackHole) setup for offline / desktop-app capture
-  offline-network.md      # running with no router/internet: Pixelblaze AP mode (192.168.4.1)
+  offline-network.md      # no router/internet: AP mode (1 device), Mac-as-AP (several), dead router
 patterns/
   reactive.js       # spectrum pattern reading bass/mid/treble/level (+ alternates)
   spectrum.js       # N-band analyzer reading the bands[] array (N must match the app)

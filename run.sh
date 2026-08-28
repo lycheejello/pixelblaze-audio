@@ -26,16 +26,28 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 # localhost, which says nothing about the network), and sweeping the wrong /24
 # fills Chrome's socket pool with dead connections — the sweep of the real
 # subnet then comes back empty even when the Pixelblaze is sitting right there.
-lan_ip() {
-  ipconfig getifaddr en0 2>/dev/null && return 0
-  ipconfig getifaddr en1 2>/dev/null && return 0
-  hostname -I 2>/dev/null | awk '{print $1}' | grep . && return 0
-  return 1
+# bridge100 comes first on purpose: with macOS Internet Sharing this Mac *is*
+# the access point, and its address on that network (192.168.2.1) lives on the
+# bridge, not on en0 — en0 is busy being the radio and often has no IPv4 of its
+# own. Checking en0 first there yields nothing, the page gets no ?lan=, and the
+# sweep guesses at subnets that aren't the one the Pixelblazes are on.
+# *Every* address, not one: sharing from wifi to ethernet leaves both bridge100
+# and en0 valid, and picking one guesses wrong half the time. The page sweeps
+# each subnet it's handed, so hand it all of them and let it try.
+lan_ips() {
+  for i in bridge100 en0 en1 $(ifconfig -l 2>/dev/null); do
+    ip="$(ipconfig getifaddr "$i" 2>/dev/null)" || continue
+    case "$ip" in
+      10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) echo "$ip" ;;
+    esac
+  done
+  hostname -I 2>/dev/null | tr ' ' '\n'          # linux
 }
-LAN_IP="$(lan_ip || true)"
+LAN_IPS="$(lan_ips | awk '!seen[$0]++' | tr '\n' ',' | sed 's/,$//')"
+LAN_IP="${LAN_IPS%%,*}"                          # the first, for the printable URL
 
 URL="http://localhost:$PORT/index.html?auto=1"
-[ -n "$LAN_IP" ] && URL="$URL&lan=$LAN_IP"
+[ -n "$LAN_IPS" ] && URL="$URL&lan=$LAN_IPS"
 
 PY=/usr/bin/python3
 [ -x "$PY" ] || PY="$(command -v python3)"
