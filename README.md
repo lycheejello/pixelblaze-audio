@@ -260,6 +260,8 @@ that file on every push and would overwrite pasted defaults on the next flash.
 index.html          # the streamer: audio capture + FFT + WebSocket + visualizer
 quickstart.html     # visual walkthrough (steps, sliders, contract, troubleshooting)
 run.sh              # serve this folder over http + open Chrome (app + device web UI)
+tools/
+  check-mirror.mjs  # assert the bike-pulse preview still matches its device pattern
 docs/
   offline-audio-macos.md  # virtual-audio-device (BlackHole) setup for offline / desktop-app capture
   offline-network.md      # no router/internet: AP mode (1 device), Mac-as-AP (several), dead router

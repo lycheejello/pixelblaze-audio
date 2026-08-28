@@ -46,8 +46,11 @@ re-sync the mirror here. Its `1_*` lane reads the streamed vars and does nothing
 without this app running; `level` is load-bearing there — it is the liveness signal
 for a stall detector, because `beat` sits at 0 through ambient passages, so an app
 that stopped sending `level` would silently drop the bikes to their idle animation
-mid-track. A headless check of the mirror lives in the session scratchpad pattern of
-`check-mirror.mjs` (zone table + stall + onset assertions). The starfield panel has
+mid-track. `node tools/check-mirror.mjs` asserts the mirror still matches the device pattern
+(zone table for all three builds, the stall fallback, the climb/bloom/swell, and
+one launch per beat on the rising edge). It pulls the mirror straight out of
+index.html, so the thing tested is the thing that ships. Run it after touching
+either side; every way these two can drift apart is silent otherwise. The starfield panel has
   a **stars** count (regenerates `MAP2D`), **copy map** (→ Pixelblaze Mapper, 2D),
   and **copy settings** (→ the pattern's `export var` defaults), plus live knobs
   that stream to the device (same live-tuning pattern as the depth-layers-mirror panel).
